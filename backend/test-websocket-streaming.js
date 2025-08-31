@@ -26,15 +26,15 @@ async function testWebSocketStreaming() {
   });
 
   client1.on('ai-streaming-start', (message) => {
-    console.log('📡 Client 1 received AI streaming start:', message.id);
+    console.log('Client 1 received AI streaming start:', message.id);
   });
 
   client1.on('ai-streaming-token', (data) => {
-    console.log('📡 Client 1 received AI token:', data.token);
+    console.log('Client 1 received AI token:', data.token);
   });
 
   client1.on('ai-streaming-complete', (message) => {
-    console.log('📡 Client 1 received AI streaming complete:', message.id);
+    console.log('Client 1 received AI streaming complete:', message.id);
   });
 
   // Test event handlers for client 2
@@ -46,20 +46,20 @@ async function testWebSocketStreaming() {
   });
 
   client2.on('ai-streaming-start', (message) => {
-    console.log('📡 Client 2 received AI streaming start:', message.id);
+    console.log('Client 2 received AI streaming start:', message.id);
   });
 
   client2.on('ai-streaming-token', (data) => {
-    console.log('📡 Client 2 received AI token:', data.token);
+    console.log('Client 2 received AI token:', data.token);
   });
 
   client2.on('ai-streaming-complete', (message) => {
-    console.log('📡 Client 2 received AI streaming complete:', message.id);
+    console.log('Client 2 received AI streaming complete:', message.id);
   });
 
   // Wait for both clients to connect, then send a message
   setTimeout(() => {
-    console.log('🚀 Sending message with AI via WebSocket...');
+    console.log(' Sending message with AI via WebSocket...');
     client1.emit('send-message-with-ai', {
       conversationId: 'test-conversation-id',
       content: 'Hello, can you help me with a coding question?',

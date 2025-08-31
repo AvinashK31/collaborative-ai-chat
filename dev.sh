@@ -3,7 +3,7 @@
 # Development script for collaborative AI chat
 # This script starts the application in development mode with hot reloading
 
-echo "🚀 Starting Collaborative AI Chat in DEVELOPMENT mode..."
+echo " Starting Collaborative AI Chat in DEVELOPMENT mode..."
 echo "📝 Changes to source code will be reflected automatically!"
 echo ""
 
@@ -12,7 +12,7 @@ echo "🛑 Stopping existing containers..."
 docker-compose down
 
 # Start in development mode
-echo "🔧 Starting development environment..."
+echo " Starting development environment..."
 docker-compose -f docker-compose.dev.yml up --build
 
 echo ""

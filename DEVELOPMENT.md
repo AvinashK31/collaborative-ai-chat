@@ -2,7 +2,7 @@
 
 ## Quick Start
 
-### Development Mode (Hot Reloading) 🚀
+### Development Mode (Hot Reloading) 
 For development with automatic code reloading:
 
 ```bash

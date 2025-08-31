@@ -3,7 +3,7 @@
 # Production script for collaborative AI chat
 # This script starts the application in production mode
 
-echo "🚀 Starting Collaborative AI Chat in PRODUCTION mode..."
+echo " Starting Collaborative AI Chat in PRODUCTION mode..."
 echo "📦 Using compiled/built versions of the application"
 echo ""
 
@@ -12,7 +12,7 @@ echo "🛑 Stopping existing containers..."
 docker-compose down
 
 # Start in production mode
-echo "🔧 Starting production environment..."
+echo " Starting production environment..."
 docker-compose up --build
 
 echo ""

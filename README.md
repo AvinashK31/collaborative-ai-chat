@@ -19,7 +19,7 @@ A modern, full-stack collaborative chat application powered by AI, built with Re
 - [Contributing](#contributing)
 - [License](#license)
 
-## 🚀 Overview
+##  Overview
 
 Collaborative AI Chat is a real-time messaging application that enables users to collaborate in conversations with AI assistance. The application features user authentication, real-time messaging, AI-powered responses, and invitation systems for team collaboration.
 
@@ -105,7 +105,7 @@ This integration enables smarter, context‑aware AI interactions and paves the 
 
 The fastest way to get started is using our provided scripts:
 
-### Development Mode (Recommended for Development) 🚀
+### Development Mode (Recommended for Development) 
 For development with hot reloading and automatic code updates:
 
 ```bash
@@ -171,7 +171,7 @@ collaborative-ai-chat/
 └── README.md
 ```
 
-## 🚀 Getting Started
+##  Getting Started
 
 ### Prerequisites
 
@@ -275,7 +275,7 @@ The application will be available at:
 - Backend API: http://localhost:9000
 - API Documentation: http://localhost:9000/api-docs
 
-## 🔧 Environment Variables
+##  Environment Variables
 
 ### Backend (.env)
 
@@ -353,7 +353,7 @@ VITE_ENABLE_ANALYTICS=false
 VITE_ENABLE_DEBUG_MODE=false
 ```
 
-## 📚 API Documentation
+##  API Documentation
 
 The API documentation is automatically generated using Swagger and is available at:
 
@@ -533,7 +533,7 @@ npx prisma migrate reset
 npx prisma studio
 ```
 
-## 🚀 Deployment
+##  Deployment
 
 ### Docker-based Deployment (Recommended)
 
@@ -633,7 +633,7 @@ The application can be deployed to Kubernetes using the provided Docker images:
    - **AWS S3**: Upload to S3 bucket with CloudFront
    - **Nginx**: Serve static files with Nginx
 
-## 🔧 Troubleshooting
+##  Troubleshooting
 
 ### Common Issues
 

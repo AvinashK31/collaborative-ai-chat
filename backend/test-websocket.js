@@ -59,7 +59,7 @@ user2Socket.on('connect', () => {
 });
 
 // Start test sequence
-console.log('🚀 Starting connection test...');
+console.log(' Starting connection test...');
 console.log('');
 
 // Connect both users

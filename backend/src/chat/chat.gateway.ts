@@ -66,7 +66,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     // Set the server in WebSocketService after a short delay to ensure server is initialized
     setTimeout(() => {
       this.webSocketService.setServer(this.server);
-      console.log('🔧 WebSocketService server initialized');
+      console.log(' WebSocketService server initialized');
     }, 1000);
   }
 
@@ -608,9 +608,9 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
   // Event listeners for message broadcasting
   @OnEvent('message.created')
   handleMessageCreated(payload: { conversationId: string; message: Record<string, unknown> }) {
-    console.log(`📡 WebSocket: Broadcasting new message to conversation ${payload.conversationId}:`, payload.message.id);
-    console.log(`📡 WebSocket: Message type:`, payload.message.type);
-    console.log(`📡 WebSocket: Message user:`, payload.message.userId);
+    console.log(`WebSocket: Broadcasting new message to conversation ${payload.conversationId}:`, payload.message.id);
+    console.log(`WebSocket: Message type:`, payload.message.type);
+    console.log(`WebSocket: Message user:`, payload.message.userId);
     
     // Add conversationId to the message for frontend handling
     const messageWithConversationId = {
@@ -621,12 +621,12 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     // Get number of clients in the room for debugging
     const room = this.server.sockets.adapter.rooms.get(payload.conversationId);
     const clientCount = room ? room.size : 0;
-    console.log(`📡 WebSocket: Conversation ${payload.conversationId} has ${clientCount} connected clients`);
+    console.log(`WebSocket: Conversation ${payload.conversationId} has ${clientCount} connected clients`);
     
     // Broadcast to ALL clients in the conversation (including sender's multiple tabs)
     this.server.to(payload.conversationId).emit('new-message', messageWithConversationId);
     
-    console.log(`📡 WebSocket: new-message event emitted to conversation ${payload.conversationId}`);
+    console.log(`WebSocket: new-message event emitted to conversation ${payload.conversationId}`);
   }
 
   @OnEvent('ai.thinking')
@@ -678,16 +678,16 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     // Get all conversations this user is part of
     const userConversations = this.userConversations.get(userId) || new Set();
     
-    console.log(`📡 Broadcasting user ${userId} status (${status}) to ${userConversations.size} conversations`);
+    console.log(`Broadcasting user ${userId} status (${status}) to ${userConversations.size} conversations`);
     
     // Broadcast status change to all their conversations
     userConversations.forEach(conversationId => {
-      console.log(`📡 Broadcasting user ${userId} status (${status}) to conversation ${conversationId}`);
+      console.log(`Broadcasting user ${userId} status (${status}) to conversation ${conversationId}`);
       
       // Get number of clients in the room for debugging
       const room = this.server.sockets.adapter.rooms.get(conversationId);
       const clientCount = room ? room.size : 0;
-      console.log(`📡 Conversation ${conversationId} has ${clientCount} connected clients`);
+      console.log(`Conversation ${conversationId} has ${clientCount} connected clients`);
       
       this.server.to(conversationId).emit('user-status-changed', {
         userId,
@@ -698,7 +698,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     });
     
     // Also broadcast to all sockets for debugging
-    console.log(`📡 Total conversations for user ${userId}:`, Array.from(userConversations));
+    console.log(`Total conversations for user ${userId}:`, Array.from(userConversations));
   }
 
   getOnlineUsersInConversation(conversationId: string): string[] {
