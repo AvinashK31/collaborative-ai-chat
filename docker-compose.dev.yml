@@ -1,0 +1,86 @@
+# Development version of docker-compose.yml with volume mounts for hot reloading
+
+services:
+  # MySQL database service
+  db:
+    image: mysql:8
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-changeme}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-collaborative_chat}
+    volumes:
+      - db_data:/var/lib/mysql
+    ports:
+      - "3307:3306"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      timeout: 20s
+      retries: 10
+
+  # Vector database service (Chroma)
+  vector-db:
+    image: ghcr.io/chroma-core/chroma:0.4.15
+    restart: unless-stopped
+    environment:
+      CHROMA_SERVER_HOST: 0.0.0.0
+      CHROMA_SERVER_HTTP_PORT: 8000
+    volumes:
+      - chroma_data:/chroma
+    ports:
+      - "8000:8000"
+
+  # NestJS backend service (Development mode)
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.dev
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      vector-db:
+        condition: service_started
+    environment:
+      DATABASE_URL: mysql://root:changeme@db:3306/collaborative_chat
+      VECTOR_DB_URL: http://vector-db:8000
+      PORT: 9000
+      CORS_ORIGIN: http://localhost:3000
+      NODE_ENV: development
+    env_file:
+      - ./backend/.env
+    volumes:
+      # Mount source code for hot reloading
+      - ./backend:/app
+      - /app/node_modules
+    ports:
+      - "9000:9000"
+    command: yarn start:dev
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('net').connect(9000, 'localhost')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # React frontend (Development mode)
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    restart: unless-stopped
+    depends_on:
+      - backend
+    environment:
+      VITE_API_BASE_URL: http://localhost:9000
+      VITE_WS_URL: http://localhost:9000
+      VITE_PORT: 3000
+    volumes:
+      # Mount source code for hot reloading
+      - ./frontend:/app
+      - /app/node_modules
+    ports:
+      - "3000:3000"
+    command: yarn dev --host
+
+volumes:
+  db_data:
+  chroma_data:

@@ -1,0 +1,41 @@
+# Development Dockerfile for NestJS backend with hot reloading
+
+FROM node:18
+
+WORKDIR /app
+
+# Copy package descriptors and lock file first
+COPY package.json yarn.lock ./
+
+# Install all dependencies (including dev dependencies)
+RUN yarn install
+
+# Copy the rest of the source code (excluding dist)
+COPY . .
+# Remove dist directory if it exists to avoid conflicts
+RUN rm -rf dist || true
+
+# Generate Prisma client
+RUN yarn prisma generate
+
+# Install netcat for database connectivity test
+RUN apt-get update && apt-get install -y netcat-openbsd && rm -rf /var/lib/apt/lists/*
+
+# Create a startup script that waits for database and runs migrations
+RUN echo '#!/bin/bash\n\
+echo "Waiting for database to be ready..."\n\
+while ! nc -z db 3306; do\n\
+  echo "Database not ready, waiting..."\n\
+  sleep 2\n\
+done\n\
+echo "Database is ready!"\n\
+echo "Running Prisma migrations..."\n\
+yarn prisma migrate deploy\n\
+echo "Starting NestJS application in development mode..."\n\
+exec yarn start:dev' > /app/start-dev.sh && chmod +x /app/start-dev.sh
+
+# Expose the backend port
+EXPOSE 9000
+
+# Start the development server
+CMD ["/app/start-dev.sh"]

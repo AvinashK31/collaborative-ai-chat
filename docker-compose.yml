@@ -1,0 +1,110 @@
+# Compose no longer requires a top‑level version.  Omitting it prevents
+# warnings about the version key being obsolete.
+
+
+services:
+  # MySQL database service
+  db:
+    image: mysql:8
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-changeme}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-collaborative_chat}
+    volumes:
+      - db_data:/var/lib/mysql
+    ports:
+      - "3307:3306"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      timeout: 20s
+      retries: 10
+
+  # Vector database service (Chroma)
+  vector-db:
+    # Chroma ships tagged images on ghcr.io.  The `0.4` tag referenced in
+    # earlier drafts of this compose file is not published, causing a
+    # “not found” error when pulling the container.  According to the
+    # Chroma documentation, version 0.4.15 is the latest 0.4 release and
+    # should be used instead【60397445228988†L524-L535】.  You may also set
+    # this to `ghcr.io/chroma-core/chroma:latest` or another tag if you
+    # wish to track newer releases.
+    image: ghcr.io/chroma-core/chroma:0.4.15
+    restart: unless-stopped
+    environment:
+      # The default port is 8000; override if necessary
+      CHROMA_SERVER_HOST: 0.0.0.0
+      CHROMA_SERVER_HTTP_PORT: 8000
+    volumes:
+      - chroma_data:/chroma
+    ports:
+      - "8000:8000"
+
+  # NestJS backend service
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      vector-db:
+        condition: service_started
+    environment:
+      # Database connection string; uses service name for host
+      DATABASE_URL: mysql://root:changeme@db:3306/collaborative_chat
+      # Vector DB configuration
+      VECTOR_DB_URL: http://vector-db:8000
+      # Application port
+      PORT: 9000
+      # CORS origin for frontend
+      CORS_ORIGIN: http://localhost:3000
+
+    # Load environment variables from the backend’s .env file.  This ensures
+    # that variables like OPENAI_API_KEY are defined when docker‑compose is
+    # executed.  See `backend/env.example` for the list of supported
+    # variables.
+    env_file:
+      - ./backend/.env
+    ports:
+      - "9000:9000"
+    # Wait for dependent services to be ready (optional healthchecks)
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('net').connect(9000, 'localhost')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # React frontend build service (multi‑stage) served by Nginx
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - backend
+    environment:
+      # Base URL for API requests; proxied through nginx conf
+      VITE_API_BASE_URL: /api
+      VITE_WS_URL: /api
+    ports:
+      - "3000:80"
+
+  # Nginx reverse proxy to unify front and back (optional)
+  # If you wish to use a separate Nginx container to serve both
+  # static assets and proxy API requests, uncomment this section
+  # and adjust the ports accordingly.  Alternatively, the frontend
+  # container already includes Nginx and proxies /api to backend.
+  # nginx:
+  #   image: nginx:1.23-alpine
+  #   volumes:
+  #     - ./frontend/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+  #   depends_on:
+  #     - frontend
+  #     - backend
+  #   ports:
+  #     - "8080:80"
+
+volumes:
+  db_data:
+  chroma_data:
