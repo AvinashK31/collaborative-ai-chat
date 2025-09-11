@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import type { Prisma } from '@prisma/client';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { VectorService } from '../langchain/vector.service';
 
@@ -8,7 +9,7 @@ export interface CreateMessageDto {
   type: 'USER' | 'AI' | 'SYSTEM';
   userId?: string;
   conversationId: string;
-  metadata?: Record<string, unknown>;
+  metadata?: Prisma.InputJsonValue;
 }
 
 @Injectable()
@@ -26,7 +27,7 @@ export class MessagesService {
         type: createMessageDto.type,
         userId: createMessageDto.userId,
         conversationId: createMessageDto.conversationId,
-        metadata: createMessageDto.metadata as any,
+        metadata: createMessageDto.metadata,
       },
       select: {
         id: true,
@@ -63,34 +64,33 @@ export class MessagesService {
    * Defaults to true if no record is found.
    */
   async getUserAiPreference(userId: string, conversationId: string): Promise<boolean> {
-    const participant: any = await (this.prisma.conversationParticipant as any).findUnique({
+    const participant = await this.prisma.conversationParticipant.findUnique({
       where: { userId_conversationId: { userId, conversationId } },
       select: { aiEnabled: true },
     });
-    return (participant?.aiEnabled ?? true) as boolean;
+    return participant?.aiEnabled ?? true;
   }
 
   /**
    * Set whether a user wants to receive AI responses in a conversation.
    */
   async setUserAiPreference(userId: string, conversationId: string, enabled: boolean) {
-    const updated: any = await (this.prisma.conversationParticipant as any).update({
+    return this.prisma.conversationParticipant.update({
       where: { userId_conversationId: { userId, conversationId } },
       data: { aiEnabled: enabled },
       select: { userId: true, conversationId: true, aiEnabled: true },
     });
-    return updated;
   }
 
   /**
    * Return the user IDs in a conversation who currently have AI enabled.
    */
   async getAiEnabledUserIds(conversationId: string): Promise<string[]> {
-    const rows: any[] = await (this.prisma.conversationParticipant as any).findMany({
-      where: { conversationId },
-      select: { userId: true, aiEnabled: true },
+    const rows = await this.prisma.conversationParticipant.findMany({
+      where: { conversationId, aiEnabled: true },
+      select: { userId: true },
     });
-    return rows.filter(r => !!r.aiEnabled).map(r => r.userId as string);
+    return rows.map(r => r.userId);
   }
 
   /** Count the current number of participants in a conversation. */
@@ -251,9 +251,10 @@ export class MessagesService {
           lastReadAt: new Date(),
         },
       });
-    } catch (error: any) {
+    } catch (error: unknown) {
       // Handle unique constraint errors gracefully (race conditions)
-      if (error?.code === 'P2002') {
+      const e = error as { code?: string };
+      if (e?.code === 'P2002') {
         console.log(`Read status already exists for user ${userId} in conversation ${conversationId}, trying update only`);
         try {
           await this.prisma.userReadStatus.updateMany({
@@ -263,7 +264,7 @@ export class MessagesService {
         } catch (updateError) {
           console.error('Failed to update read status:', updateError);
         }
-      } else if (error?.code === 'P2003') {
+      } else if (e?.code === 'P2003') {
         // Foreign key violation: conversation or user missing. Log and skip.
         console.warn(`Read status skipped due to FK constraint for user ${userId} / conversation ${conversationId}`);
       } else {
