@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { toast } from 'react-hot-toast'
 import { useAuth } from '../contexts/AuthContext'
 import { invitationsApi } from '../services/api'
 import { useNavigate, useSearchParams } from 'react-router-dom'
@@ -58,10 +59,10 @@ export default function InvitationsPage() {
     try {
       if (action === 'accept') {
         await acceptInvitation(invitationId)
-        alert('Invitation accepted! You can now access the conversation.')
+        toast.success('Invitation accepted! You can now access the conversation.')
       } else if (action === 'decline') {
         await declineInvitation(invitationId)
-        alert('Invitation declined.')
+        toast('Invitation declined.', { icon: '✉️' })
       }
       
       // Clear URL parameters
@@ -76,11 +77,11 @@ export default function InvitationsPage() {
     try {
       await invitationsApi.acceptInvitation(invitationId)
       setInvitations(prev => prev.filter(inv => inv.id !== invitationId))
-      alert('Invitation accepted! The conversation has been added to your chats.')
+      toast.success('Invitation accepted! The conversation has been added to your chats.')
     } catch (error: unknown) {
       console.error('Failed to accept invitation:', error)
       const err = error as { response?: { data?: { message?: string } } };
-      alert(err?.response?.data?.message || 'Failed to accept invitation')
+      toast.error(err?.response?.data?.message || 'Failed to accept invitation')
     } finally {
       setProcessing(null)
     }
@@ -94,7 +95,7 @@ export default function InvitationsPage() {
     } catch (error: unknown) {
       console.error('Failed to decline invitation:', error)
       const err = error as { response?: { data?: { message?: string } } };
-      alert(err?.response?.data?.message || 'Failed to decline invitation')
+      toast.error(err?.response?.data?.message || 'Failed to decline invitation')
     } finally {
       setProcessing(null)
     }

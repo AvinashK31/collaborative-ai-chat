@@ -312,7 +312,7 @@ export default function ChatPage() {
         setMessages(prev => prev.filter(msg => 
           !(msg.id.includes('streaming-ai-') || msg.id.includes('regenerating-ai-'))
         ))
-        alert('AI response failed: ' + data.error)
+        toast.error('AI response failed: ' + data.error)
       }
 
       const handleUserJoined = (data: { conversationId?: string; user: { id: string; name?: string; email: string }; joinedAt: string }) => {
@@ -856,7 +856,7 @@ export default function ChatPage() {
         console.log('Unauthorized - redirecting to login')
         logout()
       } else {
-        alert('Failed to create conversation. Please try again.')
+        toast.error('Failed to create conversation. Please try again.')
       }
     } finally {
       setCreating(false)
@@ -939,7 +939,7 @@ export default function ChatPage() {
               break
             case 'ai_error':
               setAiThinking(false)
-              alert('AI response failed: ' + data.error)
+              toast.error('AI response failed: ' + data.error)
               break
             case 'complete':
               setAiThinking(false)
@@ -1043,7 +1043,7 @@ export default function ChatPage() {
       
     } catch (error: unknown) {
       console.error('Failed to update message:', error)
-      alert('Failed to update message')
+      toast.error('Failed to update message')
     }
   }
 
@@ -1066,13 +1066,13 @@ export default function ChatPage() {
 
     try {
       await invitationsApi.sendInvitation(inviteEmail.trim(), selectedConversation.id)
-      alert('Invitation sent successfully!')
+      toast.success('Invitation sent successfully!')
       setInviteEmail('')
       setShowInviteModal(false)
     } catch (error: unknown) {
       console.error('Failed to send invitation:', error)
       const err = error as { response?: { data?: { message?: string } } };
-      alert(err?.response?.data?.message || 'Failed to send invitation')
+      toast.error(err?.response?.data?.message || 'Failed to send invitation')
     }
   }
 
@@ -1192,7 +1192,7 @@ export default function ChatPage() {
       setEditConversationTitle('')
     } catch (error: unknown) {
       console.error('Failed to update conversation title:', error)
-      alert('Failed to update conversation title')
+      toast.error('Failed to update conversation title')
     }
   }
 
@@ -1232,7 +1232,7 @@ export default function ChatPage() {
       setConversationToDelete(null)
     } catch (error: unknown) {
       console.error('Failed to delete conversation:', error)
-      alert('Failed to delete conversation')
+      toast.error('Failed to delete conversation')
     }
   }
 
