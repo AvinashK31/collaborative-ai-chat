@@ -15,6 +15,14 @@ docker-compose down
 echo " Starting development environment..."
 docker-compose -f docker-compose.dev.yml up --build
 
+# Wait for database to be ready
+echo "⏳ Waiting for database to be ready..."
+sleep 10
+
+# Run Prisma migrations
+echo "🗄️  Running Prisma migrations..."
+docker-compose -f docker-compose.dev.yml exec backend npx prisma migrate deploy
+
 echo ""
 echo "✅ Development environment started!"
 echo "🌐 Frontend: http://localhost:3000"

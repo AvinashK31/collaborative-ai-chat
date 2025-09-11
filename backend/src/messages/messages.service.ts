@@ -171,6 +171,25 @@ export class MessagesService {
 
   async updateUserReadStatus(userId: string, conversationId: string) {
     try {
+      // Defensive checks: ensure conversation exists and user is a participant
+      if (!conversationId || !userId) return;
+      const conversation = await this.prisma.conversation.findUnique({
+        where: { id: conversationId },
+        select: { id: true },
+      });
+      if (!conversation) {
+        console.warn(`Read status skipped: conversation ${conversationId} not found`);
+        return;
+      }
+      const participant = await this.prisma.conversationParticipant.findUnique({
+        where: { userId_conversationId: { userId, conversationId } },
+        select: { id: true },
+      });
+      if (!participant) {
+        console.warn(`Read status skipped: user ${userId} not in conversation ${conversationId}`);
+        return;
+      }
+
       // Update or create the read status record
       await this.prisma.userReadStatus.upsert({
         where: {
@@ -188,28 +207,23 @@ export class MessagesService {
           lastReadAt: new Date(),
         },
       });
-    } catch (error) {
+    } catch (error: any) {
       // Handle unique constraint errors gracefully (race conditions)
-      if (error.code === 'P2002') {
+      if (error?.code === 'P2002') {
         console.log(`Read status already exists for user ${userId} in conversation ${conversationId}, trying update only`);
         try {
-          // Just try to update if create failed due to race condition
           await this.prisma.userReadStatus.updateMany({
-            where: {
-              userId,
-              conversationId,
-            },
-            data: {
-              lastReadAt: new Date(),
-            },
+            where: { userId, conversationId },
+            data: { lastReadAt: new Date() },
           });
         } catch (updateError) {
           console.error('Failed to update read status:', updateError);
-          // Don't throw - this is not critical for the notification system
         }
+      } else if (error?.code === 'P2003') {
+        // Foreign key violation: conversation or user missing. Log and skip.
+        console.warn(`Read status skipped due to FK constraint for user ${userId} / conversation ${conversationId}`);
       } else {
         console.error('Unexpected error updating read status:', error);
-        // Don't throw - this is not critical for the notification system
       }
     }
   }
