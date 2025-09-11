@@ -16,6 +16,15 @@ import { MessagesService } from '../messages/messages.service';
 import { LangchainService } from '../langchain/langchain.service';
 import { WebSocketService } from '../websocket/websocket.service';
 
+// Derive allowed WebSocket origins with sensible defaults and support for CORS_ORIGIN
+const WS_ALLOWED_ORIGINS = [
+  process.env.CORS_ORIGIN,
+  'http://localhost:3000',
+  'http://127.0.0.1:3000',
+  'http://localhost:4040',
+  'http://127.0.0.1:4040',
+].filter(Boolean) as string[];
+
 interface AuthenticatedSocket extends Socket {
   user?: {
     id: string;
@@ -33,9 +42,9 @@ interface UserActivity {
 
 @WebSocketGateway({
   cors: {
-    origin: ['http://localhost:3000', 'http://127.0.0.1:3000'],
+    origin: WS_ALLOWED_ORIGINS,
     methods: ['GET', 'POST'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'Origin', 'X-Requested-With', 'Accept'],
     credentials: true,
   },
   transports: ['websocket', 'polling'],
@@ -275,6 +284,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       // Notify other participants that user joined and broadcast current user's status
       console.log(`Broadcasting user-joined event for ${client.user.email} to room ${data.conversationId}`);
       client.to(data.conversationId).emit('user-joined', {
+        conversationId: data.conversationId,
         user: {
           id: client.user.id,
           name: client.user.name,
@@ -382,11 +392,13 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       };
 
       console.log(`Broadcasting user message to room ${data.conversationId}:`, messageToSend);
-      this.server.to(data.conversationId).emit('new-message', messageToSend);
+      // Exclude the sender to prevent duplicate (temp + broadcast) messages on their UI
+      client.to(data.conversationId).emit('new-message', messageToSend);
 
-      // Notify AI thinking to all participants
+      // Notify AI thinking to all participants and the sender explicitly
       console.log(`🤖 Broadcasting AI thinking start to conversation ${data.conversationId}`);
-      this.server.to(data.conversationId).emit('ai-thinking', { isThinking: true });
+      this.server.to(data.conversationId).emit('ai-thinking', { conversationId: data.conversationId, isThinking: true });
+      client.emit('ai-thinking', { conversationId: data.conversationId, isThinking: true });
 
       // Generate AI response and stream to all participants
       try {
@@ -455,7 +467,8 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       } finally {
         // Stop AI thinking indicator
         console.log(`🤖 Broadcasting AI thinking stop to conversation ${data.conversationId}`);
-        this.server.to(data.conversationId).emit('ai-thinking', { isThinking: false });
+        this.server.to(data.conversationId).emit('ai-thinking', { conversationId: data.conversationId, isThinking: false });
+        client.emit('ai-thinking', { conversationId: data.conversationId, isThinking: false });
       }
 
     } catch (error) {
@@ -483,8 +496,9 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     }
     
     // Notify other participants that user left
-    if (client.user) {
+      if (client.user) {
       client.to(data.conversationId).emit('user-left', {
+        conversationId: data.conversationId,
         user: {
           id: client.user.id,
           name: client.user.name,
@@ -634,7 +648,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     console.log(`Broadcasting AI thinking status to conversation ${payload.conversationId}:`, payload.isThinking);
     
     // Broadcast to ALL clients in the conversation (including sender's multiple tabs)
-    this.server.to(payload.conversationId).emit('ai-thinking', { isThinking: payload.isThinking });
+    this.server.to(payload.conversationId).emit('ai-thinking', { conversationId: payload.conversationId, isThinking: payload.isThinking });
   }
 
   @OnEvent('message.updated')

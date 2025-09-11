@@ -125,6 +125,7 @@ export const messagesApi = {
       
       const reader = response.body.getReader()
       const decoder = new TextDecoder()
+      let buffer = ''
       
       const readStream = async () => {
         try {
@@ -133,20 +134,30 @@ export const messagesApi = {
             if (done) break
             
             const chunk = decoder.decode(value, { stream: true })
-            const lines = chunk.split('\n')
-            
-            for (const line of lines) {
-              if (line.startsWith('data: ')) {
-                try {
-                  const data = JSON.parse(line.slice(6))
-                  onMessage(data)
-                  
-                  if (data.type === 'complete') {
-                    return
-                  }
-                } catch (error) {
-                  console.error('Error parsing SSE data:', error)
-                }
+            buffer += chunk
+
+            // SSE events are separated by a blank line (\n\n)
+            const events = buffer.split('\n\n')
+            // Keep the last partial chunk in the buffer
+            buffer = events.pop() || ''
+
+            for (const evt of events) {
+              // Each event can have multiple lines; we only care about data: lines
+              const dataLines = evt
+                .split('\n')
+                .filter(l => l.startsWith('data: '))
+                .map(l => l.slice(6))
+
+              if (dataLines.length === 0) continue
+
+              const payload = dataLines.join('\n')
+              try {
+                const data = JSON.parse(payload)
+                onMessage(data)
+                if (data.type === 'complete') return
+              } catch (error) {
+                // Incomplete JSON may happen across chunks; re-buffer and continue
+                buffer = payload + '\n\n' + buffer
               }
             }
           }

@@ -69,6 +69,8 @@ export default function ChatPage() {
   const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>('default')
   const [unreadCounts, setUnreadCounts] = useState<{[conversationId: string]: number}>({})
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  // Throttle local 'active' emits to avoid spamming the server
+  const lastActiveEmitRef = useRef<number>(0)
 
   useEffect(() => {
     // Only load if user is authenticated
@@ -90,6 +92,8 @@ export default function ChatPage() {
       // Clear editing indicators when switching conversations
       setEditingUsers({})
       setEditingConversationUsers([])
+      // Reset AI thinking state when switching rooms to avoid stale indicator
+      setAiThinking(false)
     }
   }, [selectedConversation])
 
@@ -133,7 +137,7 @@ export default function ChatPage() {
         if (isCurrentConversation) {
           console.log('🌐 Processing message for current conversation')
           
-          // Add message to current conversation's message list
+         // Add message to current conversation's message list
           setMessages(prev => {
             // Check for exact message ID match to avoid duplicates
             const exactMatch = prev.find(msg => msg.id === message.id)
@@ -153,6 +157,19 @@ export default function ChatPage() {
                 const updatedMessages = [...prev]
                 updatedMessages[streamingMessageIndex] = message
                 return updatedMessages
+              }
+            }
+
+            // For USER messages sent by the current user, replace any local temporary
+            // message (id starting with "temp-") that matches the content. This avoids
+            // duplicates when the server also broadcasts the persisted message.
+            if (message.type === 'USER' && message.userId === user?.id) {
+              const tempIndex = prev.findIndex(msg => msg.id.startsWith('temp-') && msg.type === 'USER' && msg.content === message.content)
+              if (tempIndex !== -1) {
+                console.log('🌐 Replacing local temp user message with persisted message:', message.id)
+                const updated = [...prev]
+                updated[tempIndex] = message
+                return updated
               }
             }
             
@@ -224,8 +241,12 @@ export default function ChatPage() {
         }
       }
 
-      const handleAiThinking = (data: { isThinking: boolean }) => {
-        console.log('AI thinking status:', data.isThinking)
+      const handleAiThinking = (data: { conversationId?: string; isThinking: boolean }) => {
+        console.log('AI thinking status:', data.isThinking, 'for conversation:', data.conversationId)
+        // Only reflect thinking indicator for the currently selected conversation
+        if (!selectedConversation || (data.conversationId && data.conversationId !== selectedConversation.id)) {
+          return
+        }
         setAiThinking(data.isThinking)
       }
 
@@ -263,12 +284,44 @@ export default function ChatPage() {
         alert('AI response failed: ' + data.error)
       }
 
-      const handleUserJoined = (data: { user: { id: string; name?: string; email: string }; joinedAt: string }) => {
+      const handleUserJoined = (data: { conversationId?: string; user: { id: string; name?: string; email: string }; joinedAt: string }) => {
         console.log('User joined:', data.user.name || data.user.email)
+        const convId = data.conversationId || selectedConversation?.id
+        if (!convId) return
+        // Mark user online for that conversation
+        setUserStatuses(prev => ({
+          ...prev,
+          [convId]: {
+            ...prev[convId],
+            [data.user.id]: 'online',
+          },
+        }))
+        // Update participants list in both selectedConversation and sidebar conversations
+        setConversations(prev => prev.map(c => {
+          if (c.id !== convId) return c
+          if (c.participants?.some(p => p.user.id === data.user.id)) return c
+          const added = { id: `temp-${data.user.id}`, user: { id: data.user.id, name: data.user.name, email: data.user.email } }
+          return { ...c, participants: [ ...(c.participants || []), added ] }
+        }))
+        if (selectedConversation?.id === convId && !selectedConversation.participants?.some(p => p.user.id === data.user.id)) {
+          setSelectedConversation({
+            ...selectedConversation,
+            participants: [ ...(selectedConversation.participants || []), { id: `temp-${data.user.id}`, user: { id: data.user.id, name: data.user.name, email: data.user.email } } ],
+          })
+        }
       }
 
-      const handleUserLeft = (data: { user: { id: string; name?: string; email: string }; leftAt: string }) => {
+      const handleUserLeft = (data: { conversationId?: string; user: { id: string; name?: string; email: string }; leftAt: string }) => {
         console.log('User left:', data.user.name || data.user.email)
+        const convId = data.conversationId || selectedConversation?.id
+        if (!convId) return
+        setUserStatuses(prev => ({
+          ...prev,
+          [convId]: {
+            ...prev[convId],
+            [data.user.id]: 'offline',
+          },
+        }))
       }
 
       const handleUserTyping = (data: { userId: string, userName: string, isTyping: boolean, conversationId?: string }) => {
@@ -377,6 +430,13 @@ export default function ChatPage() {
 
       const handleUsersStatus = (data: { conversationId: string, onlineUsers: string[] }) => {
         console.log('Users status received:', data)
+        // Merge a basic online/offline view based on the provided list
+        setUserStatuses(prev => {
+          const current = { ...(prev[data.conversationId] || {}) }
+          // Mark provided users online; leave others as-is
+          data.onlineUsers.forEach(uid => { current[uid] = 'online' })
+          return { ...prev, [data.conversationId]: current }
+        })
       }
 
       const handleUserStatusChanged = (data: { userId: string, isOnline: boolean, status: 'online' | 'away' | 'offline', conversationId: string }) => {
@@ -505,6 +565,10 @@ export default function ChatPage() {
       if (socket && isConnected) {
         console.log(`📱 Real-time notifications should ${isHidden ? 'WORK' : 'be for current conversation only'}`)
       }
+      // Emit activity state so other users see accurate presence
+      if (socket) {
+        socket.emit('user-activity', { type: isHidden ? 'hidden' : 'visible' })
+      }
     }
 
     const handleFocus = () => {
@@ -513,10 +577,18 @@ export default function ChatPage() {
         console.log('📱 Reconnecting socket after focus...')
         socket.connect()
       }
+      // Mark as active
+      if (socket) {
+        socket.emit('user-activity', { type: 'active' })
+      }
     }
 
     const handleBlur = () => {
       console.log('📱 Window BLURRED')
+      // Mark as inactive
+      if (socket) {
+        socket.emit('user-activity', { type: 'inactive' })
+      }
     }
 
     document.addEventListener('visibilitychange', handleVisibilityChange)
@@ -532,6 +604,31 @@ export default function ChatPage() {
       window.removeEventListener('blur', handleBlur)
     }
   }, [socket, isConnected])
+
+  // Emit 'active' for real user interactions (mousemove/keydown/click/scroll/touch) with throttling
+  useEffect(() => {
+    if (!socket) return
+    const ACTIVE_THROTTLE_MS = 15000 // 15s
+    const markActive = () => {
+      const now = Date.now()
+      if (now - lastActiveEmitRef.current < ACTIVE_THROTTLE_MS) return
+      lastActiveEmitRef.current = now
+      socket.emit('user-activity', { type: 'active' })
+    }
+    const opts: AddEventListenerOptions & EventListenerOptions = { passive: true }
+    window.addEventListener('mousemove', markActive, opts)
+    window.addEventListener('keydown', markActive, opts)
+    window.addEventListener('click', markActive, opts)
+    window.addEventListener('scroll', markActive, opts)
+    window.addEventListener('touchstart', markActive, opts)
+    return () => {
+      window.removeEventListener('mousemove', markActive)
+      window.removeEventListener('keydown', markActive)
+      window.removeEventListener('click', markActive)
+      window.removeEventListener('scroll', markActive)
+      window.removeEventListener('touchstart', markActive)
+    }
+  }, [socket])
 
   // Initialize notifications and sound
   useEffect(() => {
@@ -754,6 +851,8 @@ export default function ChatPage() {
           content: messageContent,
           messageId: tempMessage.id
         })
+        // Immediately show thinking indicator for the sender; it will stop on complete/error
+        setAiThinking(true)
       } else {
         // Fallback to API if WebSocket is not available
         console.warn('WebSocket not available, falling back to API')
@@ -1305,7 +1404,11 @@ export default function ChatPage() {
                           )}
                         </div>
                         <p className="text-sm text-gray-500 mt-1">
-                          {conversation.participants?.length || 0} participants
+                          {(() => {
+                            const map = userStatuses[conversation.id] || {}
+                            const total = Math.max(conversation.participants?.length || 0, Object.keys(map).length)
+                            return `${total} participants`
+                          })()}
                         </p>
                       </div>
                       
@@ -1356,7 +1459,14 @@ export default function ChatPage() {
                   {selectedConversation.title || 'Untitled Chat'}
                 </h2>
                 <div className="flex items-center space-x-2 text-sm text-gray-500">
-                  <span>{selectedConversation.participants?.length || 0} participants</span>
+                  <span>
+                    {(() => {
+                      const statuses = userStatuses[selectedConversation.id] || {}
+                      const onlineCount = Object.values(statuses).filter(s => s !== 'offline').length
+                      const total = selectedConversation.participants?.length || 0
+                      return `${onlineCount} online • ${total} participants`
+                    })()}
+                  </span>
                   {selectedConversation.participants && selectedConversation.participants.length > 0 && (
                     <div className="flex items-center space-x-3 ml-4">
                       {selectedConversation.participants.map((participant: Participant) => (
@@ -1387,36 +1497,35 @@ export default function ChatPage() {
             {/* Messages */}
             <div className="flex-1 overflow-y-auto p-6 bg-gradient-to-b from-gray-50 to-white">
               <div className="max-w-4xl mx-auto space-y-6">
-                {messages.map((message) => (
+                {messages.map((message) => {
+                  // Skip rendering placeholder AI messages with no content (shown via 'AI is thinking...')
+                  if (message.type === 'AI' && (!message.content || message.content.trim() === '')) {
+                    return null
+                  }
+                  return (
                   <div
                     key={message.id}
                     className={`flex ${message.userId === user?.id ? 'justify-end' : 'justify-start'}`}
                   >
                     <div className={`max-w-2xl lg:max-w-3xl ${message.userId === user?.id ? 'text-right' : 'text-left'}`}>
-                      {/* User Name Label */}
-                      <div className={`text-xs font-medium mb-2 px-2 ${
-                        message.type === 'AI' 
-                          ? 'text-purple-600'
-                          : message.userId === user?.id
-                          ? 'text-blue-600'
-                          : 'text-gray-600'
-                      }`}>
-                        {message.type === 'AI' 
-                          ? (
+                      {/* Name label: show for AI or other users; hide for own messages */}
+                      {(message.type === 'AI' || message.userId !== user?.id) && (
+                        <div className={`text-xs font-medium mb-2 px-2 ${
+                          message.type === 'AI' 
+                            ? 'text-purple-600'
+                            : 'text-gray-600'
+                        }`}>
+                          {message.type === 'AI' ? (
                             <span className="flex items-center space-x-2">
                               <svg className="w-4 h-4 text-purple-500" fill="currentColor" viewBox="0 0 20 20">
                                 <path fillRule="evenodd" d="M11.49 3.17c-.38-1.56-2.6-1.56-2.98 0a1.532 1.532 0 01-2.286.948c-1.372-.836-2.942.734-2.106 2.106.54.886.061 2.042-.947 2.287-1.561.379-1.561 2.6 0 2.978a1.532 1.532 0 01.947 2.287c-.836 1.372.734 2.942 2.106 2.106a1.532 1.532 0 012.287.947c.379 1.561 2.6 1.561 2.978 0a1.533 1.533 0 012.287-.947c1.372.836 2.942-.734 2.106-2.106a1.533 1.533 0 01.947-2.287c1.561-.379 1.561-2.6 0-2.978a1.532 1.532 0 01-.947-2.287c.836-1.372-.734-2.942-2.106-2.106a1.532 1.532 0 01-2.287-.947zM10 13a3 3 0 100-6 3 3 0 000 6z" clipRule="evenodd" />
                               </svg>
                               <span>AI Assistant</span>
                             </span>
-                          )
-                          : (
+                          ) : (
                             <span className="flex items-center space-x-2">
                               <span>
-                                {message.userId === user?.id
-                                  ? `You (${user?.name || user?.email})`
-                                  : (message.user?.name || message.user?.email || 'Unknown User')
-                                }
+                                {message.user?.name || message.user?.email || 'Unknown User'}
                               </span>
                               {message.userId && message.userId !== user?.id && (
                                 <div className={`w-1.5 h-1.5 rounded-full ${
@@ -1424,9 +1533,9 @@ export default function ChatPage() {
                                 }`} />
                               )}
                             </span>
-                          )
-                        }
-                      </div>
+                          )}
+                        </div>
+                      )}
                       
                       <div
                         className={`px-6 py-4 rounded-2xl shadow-sm relative group transition-all duration-200 hover:shadow-md ${
@@ -1616,52 +1725,19 @@ export default function ChatPage() {
                       </div>
                     </div>
                   </div>
-                ))}
+                )})}
                 
-                {aiThinking && (
-                  <div className="flex justify-start">
-                    <div className="max-w-2xl lg:max-w-3xl text-left">
-                      <div className="text-xs font-medium mb-2 px-2 text-purple-600">
-                        <span className="flex items-center space-x-2">
-                          <svg className="w-4 h-4 text-purple-500" fill="currentColor" viewBox="0 0 20 20">
-                            <path fillRule="evenodd" d="M11.49 3.17c-.38-1.56-2.6-1.56-2.98 0a1.532 1.532 0 01-2.286.948c-1.372-.836-2.942.734-2.106 2.106.54.886.061 2.042-.947 2.287-1.561.379-1.561 2.6 0 2.978a1.532 1.532 0 01.947 2.287c-.836 1.372.734 2.942 2.106 2.106a1.532 1.532 0 012.287.947c.379 1.561 2.6 1.561 2.978 0a1.533 1.533 0 012.287-.947c1.372.836 2.942-.734 2.106-2.106a1.533 1.533 0 01.947-2.287c1.561-.379 1.561-2.6 0-2.978a1.532 1.532 0 01-.947-2.287c.836-1.372-.734-2.942-2.106-2.106a1.532 1.532 0 01-2.287-.947zM10 13a3 3 0 100-6 3 3 0 000 6z" clipRule="evenodd" />
-                          </svg>
-                          <span>AI Assistant</span>
-                        </span>
-                      </div>
-                      <div className="bg-white border border-purple-100 px-6 py-4 rounded-2xl shadow-sm">
-                        <div className="flex items-center space-x-3">
-                          <div className="flex space-x-1">
-                            <div className="w-2 h-2 bg-purple-500 rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></div>
-                            <div className="w-2 h-2 bg-purple-500 rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></div>
-                            <div className="w-2 h-2 bg-purple-500 rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></div>
-                          </div>
-                          <span className="text-sm text-purple-600 font-medium">AI is thinking...</span>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                )}
+                {/* Removed transcript bubble for AI thinking; indicator is shown inline near composer */}
 
                 {/* Typing indicators for other users */}
                 {typingUsers.length > 0 && (
                   <div className="flex justify-start">
                     <div className="max-w-2xl lg:max-w-3xl text-left">
-                      <div className="text-xs font-medium mb-2 px-2 text-gray-600">
+                      <div className="text-xs font-medium px-2 py-1 text-gray-600 bg-gray-100 inline-block rounded-md">
                         {typingUsers.length === 1 
                           ? `${typingUsers[0]} is typing...`
                           : `${typingUsers.join(', ')} are typing...`
                         }
-                      </div>
-                      <div className="bg-gray-100 text-gray-700 px-6 py-4 rounded-2xl shadow-sm">
-                        <div className="flex items-center space-x-3">
-                          <div className="flex space-x-1">
-                            <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></div>
-                            <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></div>
-                            <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></div>
-                          </div>
-                          <span className="text-sm text-gray-600 font-medium">Typing...</span>
-                        </div>
                       </div>
                     </div>
                   </div>
@@ -1674,6 +1750,23 @@ export default function ChatPage() {
             {/* Message Input */}
             <div className="p-6 border-t border-gray-200 bg-white">
               <div className="max-w-4xl mx-auto">
+                {/* Subtle inline AI thinking indicator (fades in/out) */}
+                <div
+                  className={`transition-all duration-500 ease-out mb-3 ${
+                    aiThinking ? 'opacity-100 max-h-8' : 'opacity-0 max-h-0'
+                  }`}
+                  aria-live="polite"
+                  aria-atomic="true"
+                >
+                  <div className="inline-flex items-center px-3 py-1 rounded-full bg-purple-50 text-purple-700 text-xs shadow-sm">
+                    <span className="flex space-x-1 mr-2">
+                      <span className="w-1.5 h-1.5 bg-purple-500 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+                      <span className="w-1.5 h-1.5 bg-purple-500 rounded-full animate-bounce" style={{ animationDelay: '120ms' }} />
+                      <span className="w-1.5 h-1.5 bg-purple-500 rounded-full animate-bounce" style={{ animationDelay: '240ms' }} />
+                    </span>
+                    <span>AI is thinking…</span>
+                  </div>
+                </div>
                 <form onSubmit={sendMessage} className="flex space-x-4">
                   <input
                     type="text"

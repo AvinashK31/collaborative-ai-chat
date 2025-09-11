@@ -41,10 +41,6 @@ export function SocketProvider({ children }: SocketProviderProps) {
       console.log('User ID:', user.id)
       console.log('Access token exists:', !!access_token)
       console.log('Access token preview:', access_token ? access_token.substring(0, 20) + '...' : 'null')
-      console.log('Socket URL:', socketUrl)
-      console.log('User ID:', user.id)
-      console.log('Access token exists:', !!access_token)
-      console.log('Access token preview:', access_token ? access_token.substring(0, 20) + '...' : 'null')
       
       // Don't create socket if no valid access_token
       if (!access_token || access_token === 'undefined' || access_token === 'null') {

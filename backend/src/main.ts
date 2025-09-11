@@ -57,7 +57,9 @@ async function bootstrap() {
     },
   });
 
-  const port = configService.get<number>('PORT') || 9000;
+  // Prefer structured config value (loaded via configuration.ts),
+  // falling back to environment variable PORT
+  const port = (configService.get<number>('port') ?? configService.get<number>('PORT')) || 9000;
   await app.listen(port);
   
   console.log(` Application is running on: http://localhost:${port}`);

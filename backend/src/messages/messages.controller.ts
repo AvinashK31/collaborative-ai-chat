@@ -19,6 +19,7 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { CreateMessageDto } from './dto/create-message.dto';
 import { UpdateMessageDto } from './dto/update-message.dto';
 import { WebSocketService } from '../websocket/websocket.service';
+import { ConfigService } from '@nestjs/config';
 
 @ApiTags('messages')
 @ApiBearerAuth('JWT-auth')
@@ -30,6 +31,7 @@ export class MessagesController {
     private langchainService: LangchainService,
     private eventEmitter: EventEmitter2,
     private webSocketService: WebSocketService,
+    private configService: ConfigService,
   ) {}
 
   @Get('conversation/:conversationId')
@@ -64,8 +66,10 @@ export class MessagesController {
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Headers', 'Cache-Control');
+    // Align with CORS configuration while remaining permissive for SSE
+    const corsOrigin = this.configService.get<string>('CORS_ORIGIN') || '*';
+    res.setHeader('Access-Control-Allow-Origin', corsOrigin);
+    res.setHeader('Access-Control-Allow-Headers', 'Authorization, Cache-Control, Content-Type');
     // Persist the user message
     const userMessage = await this.messagesService.createMessage({
       ...createMessageDto,
