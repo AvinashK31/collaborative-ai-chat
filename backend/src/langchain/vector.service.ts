@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
+import type { EmbeddingsInterface } from '@langchain/core/embeddings';
 
 /**
  * An embedding document returned from the vector store.  Only the
@@ -8,10 +9,7 @@ import { PrismaService } from '../prisma/prisma.service';
  * fields may be present in the actual document returned by
  * LangChain.
  */
-export interface EmbeddingDocument {
-  pageContent: string;
-  metadata: Record<string, unknown>;
-}
+export interface EmbeddingDocument { pageContent: string; metadata: Record<string, unknown> }
 
 /**
  * A minimal interface for a vector store.  Implementations must
@@ -78,7 +76,7 @@ export class VectorService {
    * messages.  The type is unknown here to avoid the use of `any`
    * because OpenAIEmbeddings is not available at compile time.
    */
-  private embeddings: unknown;
+  private embeddings!: EmbeddingsInterface;
 
   constructor(private configService: ConfigService, private prisma: PrismaService) {
     this.initializeStore().catch((err) => {
@@ -112,11 +110,7 @@ export class VectorService {
         const { Chroma } = await import('langchain/vectorstores/chroma');
         const collectionName = this.configService.get<string>('VECTOR_DB_COLLECTION') || 'messages';
         const url = this.configService.get<string>('VECTOR_DB_URL') || undefined;
-        // Cast embeddings to any because the EmbeddingsInterface type is
-        // not available at compile time and the constructor accepts a
-        // generic embeddings instance.  This avoids TypeScript errors
-        // while still preserving runtime behaviour.
-        this.vectorStore = (await Chroma.fromExistingCollection(this.embeddings as any, {
+        this.vectorStore = (await Chroma.fromExistingCollection(this.embeddings, {
           collectionName,
           url,
         })) as unknown as VectorStore;
@@ -127,7 +121,7 @@ export class VectorService {
       }
     }
     // Default: in‑memory vector store
-    this.vectorStore = (await MemoryVectorStore.fromTexts([], [], this.embeddings as any)) as unknown as VectorStore;
+    this.vectorStore = (await MemoryVectorStore.fromTexts([], [], this.embeddings)) as unknown as VectorStore;
     this.logger.log('Vector store initialised with in‑memory provider');
   }
 
@@ -147,13 +141,8 @@ export class VectorService {
       // Each document comprises the pageContent and metadata.  The
       // metadata must include the identifiers to support filtering.
       const { Document } = await import('@langchain/core/documents');
-      const documents: EmbeddingDocument[] = [
-        new Document({
-          pageContent: content,
-          metadata: { messageId, conversationId },
-        }) as unknown as EmbeddingDocument,
-      ];
-      await this.vectorStore.addDocuments(documents);
+      const doc = new Document({ pageContent: content, metadata: { messageId, conversationId } });
+      await this.vectorStore.addDocuments([doc as unknown as EmbeddingDocument]);
     } catch (err) {
       this.logger.warn(`Failed to add message embedding for ${messageId}`, err);
     }
@@ -181,5 +170,60 @@ export class VectorService {
       this.logger.warn(`Failed to search similar messages for conversation ${conversationId}`, err);
       return [];
     }
+  }
+
+  // Hybrid retrieval: blend vector similarity with simple keyword matching
+  async hybridSearch(
+    conversationId: string,
+    query: string,
+    k = 5,
+  ): Promise<{
+    query: string;
+    keywords: string[];
+    items: Array<{ messageId: string; preview: string; vecScore: number; keywordHit: boolean; hybridScore: number }>;
+  }> {
+    if (!query) return { query, keywords: [], items: [] };
+    const keywords = Array.from(new Set(query.split(/\W+/).filter((w) => w.length >= 4))).slice(0, 5);
+    const vecResults = await this.searchSimilarMessages(conversationId, query, Math.max(k * 2, 5));
+    const vecMax = vecResults.reduce((m, [, s]) => (s > m ? s : m), 0.0001);
+    const vecMap = new Map<string, { preview: string; vecScore: number }>();
+    for (const [doc, score] of vecResults) {
+      const msgId = String((doc.metadata as { messageId?: unknown }).messageId ?? '');
+      if (!msgId) continue;
+      vecMap.set(msgId, { preview: doc.pageContent.slice(0, 300), vecScore: score });
+    }
+    // Keyword LIKE search (best-effort)
+    let likeItems: Array<{ id: string; content: string }> = [];
+    try {
+      if (keywords.length) {
+        const ors = keywords.map((kw) => ({ content: { contains: kw } }));
+        const rows = await this.prisma.message.findMany({
+          where: { conversationId, OR: ors },
+          select: { id: true, content: true },
+          take: Math.max(k * 4, 10),
+        });
+        likeItems = rows || [];
+      }
+    } catch (e) {
+      this.logger.warn('Keyword like search failed, continuing with vector only', e as Error);
+    }
+    const likeSet = new Set<string>(likeItems.map((r) => String(r.id)));
+    const candidateIds = new Set<string>([...vecMap.keys(), ...likeSet]);
+    const items: Array<{ messageId: string; preview: string; vecScore: number; keywordHit: boolean; hybridScore: number }> = [];
+    for (const id of candidateIds) {
+      const vec = vecMap.get(id);
+      let preview = vec?.preview ?? '';
+      const vecScore = vec?.vecScore ?? 0;
+      const keywordHit = likeSet.has(id);
+      if (!preview && keywordHit) {
+        const r = likeItems.find((x) => String(x.id) === id);
+        if (r) preview = String(r.content).slice(0, 300);
+      }
+      const vecNorm = vecScore / vecMax;
+      const hybridScore = vecNorm * 0.7 + (keywordHit ? 0.3 : 0);
+      items.push({ messageId: id, preview, vecScore, keywordHit, hybridScore });
+    }
+    items.sort((a, b) => b.hybridScore - a.hybridScore);
+    return { query, keywords, items: items.slice(0, k) };
   }
 }

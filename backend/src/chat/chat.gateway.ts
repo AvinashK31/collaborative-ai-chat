@@ -705,10 +705,10 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     console.log(`WebSocket: Message user:`, payload.message.userId);
 
     // Add conversationId to the message for frontend handling
-    const messageWithConversationId = {
-      ...payload.message,
-      conversationId: payload.conversationId
-    } as any;
+      const messageWithConversationId: Record<string, unknown> = {
+        ...payload.message,
+        conversationId: payload.conversationId,
+      };
 
     // For AI messages, gate delivery by user preference (SSE path)
     if (String(payload.message.type) === 'AI') {
