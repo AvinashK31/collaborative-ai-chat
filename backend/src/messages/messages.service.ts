@@ -8,6 +8,7 @@ export interface CreateMessageDto {
   type: 'USER' | 'AI' | 'SYSTEM';
   userId?: string;
   conversationId: string;
+  metadata?: Record<string, unknown>;
 }
 
 @Injectable()
@@ -25,6 +26,7 @@ export class MessagesService {
         type: createMessageDto.type,
         userId: createMessageDto.userId,
         conversationId: createMessageDto.conversationId,
+        metadata: createMessageDto.metadata as any,
       },
       select: {
         id: true,
@@ -33,6 +35,7 @@ export class MessagesService {
         userId: true,
         conversationId: true,
         createdAt: true,
+        metadata: true,
         user: {
           select: {
             id: true,
@@ -53,6 +56,46 @@ export class MessagesService {
       }
     }
     return message;
+  }
+
+  /**
+   * Get whether the given user has AI responses enabled in a conversation.
+   * Defaults to true if no record is found.
+   */
+  async getUserAiPreference(userId: string, conversationId: string): Promise<boolean> {
+    const participant: any = await (this.prisma.conversationParticipant as any).findUnique({
+      where: { userId_conversationId: { userId, conversationId } },
+      select: { aiEnabled: true },
+    });
+    return (participant?.aiEnabled ?? true) as boolean;
+  }
+
+  /**
+   * Set whether a user wants to receive AI responses in a conversation.
+   */
+  async setUserAiPreference(userId: string, conversationId: string, enabled: boolean) {
+    const updated: any = await (this.prisma.conversationParticipant as any).update({
+      where: { userId_conversationId: { userId, conversationId } },
+      data: { aiEnabled: enabled },
+      select: { userId: true, conversationId: true, aiEnabled: true },
+    });
+    return updated;
+  }
+
+  /**
+   * Return the user IDs in a conversation who currently have AI enabled.
+   */
+  async getAiEnabledUserIds(conversationId: string): Promise<string[]> {
+    const rows: any[] = await (this.prisma.conversationParticipant as any).findMany({
+      where: { conversationId },
+      select: { userId: true, aiEnabled: true },
+    });
+    return rows.filter(r => !!r.aiEnabled).map(r => r.userId as string);
+  }
+
+  /** Count the current number of participants in a conversation. */
+  async getParticipantCount(conversationId: string): Promise<number> {
+    return this.prisma.conversationParticipant.count({ where: { conversationId } });
   }
 
   async getConversationMessages(conversationId: string, limit: number = 50) {
@@ -112,6 +155,7 @@ export class MessagesService {
           select: {
             id: true,
             title: true,
+            aiEnabled: true,
           },
         },
       },
@@ -335,4 +379,13 @@ export class MessagesService {
 
     return unreadCount;
   }
-} 
+
+  async getConversationAiEnabled(conversationId: string): Promise<boolean> {
+    const conv = await this.prisma.conversation.findUnique({ where: { id: conversationId }, select: { aiEnabled: true } });
+    return conv?.aiEnabled ?? true;
+  }
+
+  async setConversationAiEnabled(conversationId: string, enabled: boolean) {
+    return this.prisma.conversation.update({ where: { id: conversationId }, data: { aiEnabled: enabled }, select: { id: true, aiEnabled: true } });
+  }
+}

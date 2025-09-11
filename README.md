@@ -23,6 +23,13 @@ A modern, full-stack collaborative chat application powered by AI, built with Re
 
 Collaborative AI Chat is a real-time messaging application that enables users to collaborate in conversations with AI assistance. The application features user authentication, real-time messaging, AI-powered responses, and invitation systems for team collaboration.
 
+### Recent Technical Changes (Sep 2025)
+- Room-level AI toggle for multi-user chats (AI on/off for everyone in the room); solo chats always have AI on
+- AI delivery gated per room for thinking/tokens/final messages over WebSocket and SSE
+- Message persistence includes structured metadata (origin, AI settings at send time)
+- Vector store integration tightened: embeddings saved for all non-system messages; retrieval scoped per conversation
+- Dev DX: backend dev container runs Prisma generate + migrations automatically via `start-dev.sh`
+
 ### Key Features
 
 - **Real-time Messaging**: WebSocket-based instant messaging
@@ -52,6 +59,12 @@ Collaborative AI Chat is a real-time messaging application that enables users to
 - Streaming AI responses
 - Conversation memory
 
+#### How AI Is Orchestrated (LangChain + Vector DB)
+- LangChain `ChatOpenAI` produces responses with streaming; model options adapt (Responses API vs Chat Completions)
+- `ConversationSummaryBufferMemory` maintains long‑running context by summarising older turns
+- Vector search augments prompts with semantically similar messages from the same conversation
+- Prompts are constructed from: recent history + top‑K similar snippets + current user input for more grounded replies
+
 ### Collaboration Features
 - User invitation system
 - Conversation sharing
@@ -60,15 +73,25 @@ Collaborative AI Chat is a real-time messaging application that enables users to
 
 ### Vector Database Integration
 
-To enrich AI responses with semantically similar context, the application integrates a vector database. Each message is embedded using OpenAI embeddings and stored in a vector store (in memory by default). When generating an AI reply, the system performs a similarity search to retrieve relevant past messages from the same conversation and includes them in the prompt sent to the language model.
+Our chat uses a vector database to add semantic memory to each conversation:
+- On every non‑system message (user or AI), we compute an OpenAI embedding and store it in the vector store along with metadata (`messageId`, `conversationId`).
+- Before calling the LLM, we perform a similarity search (top‑K) filtered to the active `conversationId` and incorporate the most relevant snippets into the prompt.
 
-Supported vector providers:
+Supported providers (via `VECTOR_DB_PROVIDER`):
+- **memory** (default): LangChain `MemoryVectorStore` for quick local dev.
+- **chroma**: persistent ChromaDB (`VECTOR_DB_URL`, `VECTOR_DB_COLLECTION`).
 
-* **In‑memory** – default, uses LangChain's `MemoryVectorStore`.
-* **ChromaDB** – persistent store; set `VECTOR_DB_PROVIDER=chroma` and supply `VECTOR_DB_URL` and `VECTOR_DB_COLLECTION`.
-* **Weaviate** – additional providers can be added by extending `src/langchain/vector.service.ts`.
+Benefits:
+- Grounded, context‑aware answers that recall earlier details without overloading token limits
+- Fast retrieval scoped to the active room only
+- Extensible provider model (swap in Pinecone/Weaviate/etc. by extending `backend/src/langchain/vector.service.ts`)
 
-This integration enables smarter, context‑aware AI interactions and paves the way for search across conversations.
+### LangChain Integration Details
+- Model wrapper: LangChain `ChatOpenAI`; switches automatically to the Responses API for “gpt‑5 / gpt‑4o / o‑series” models
+- Streaming: token‑by‑token via `llm.stream`, broadcast in real‑time over WebSockets
+- Memory: `ConversationSummaryBufferMemory` incrementally summarises long threads to stay within token budgets
+- Prompting: deterministic construction that merges recent history, K‑NN similar snippets, and the latest user message
+- Safety & resilience: configuration edge cases (e.g., temperature not supported) are handled with helpful fallbacks
 
 ## 🛠 Tech Stack
 
@@ -117,6 +140,7 @@ For development with hot reloading and automatic code updates:
 - ✅ Changes to source code are reflected immediately
 - ✅ No need to rebuild containers for code changes
 - ✅ Full development experience with debugging
+ - ✅ Backend container waits for DB, runs Prisma generate + migrations via `backend/start-dev.sh`
 
 ### Production Mode 📦
 For production deployment:
@@ -379,6 +403,12 @@ The API documentation is automatically generated using Swagger and is available 
 - `PATCH /messages/:id` - Update message
 - `GET /messages/unread-counts` - Get unread message counts
 - `POST /messages/mark-read/:id` - Mark conversation as read
+
+### Real‑time Events (Sockets)
+- `join-conversation` / `user-joined-conversation`: join a room and receive bootstrapped messages and presence
+- `send-message-with-ai`: persist user message; if room AI is enabled, stream AI tokens and final response
+- `ai-thinking` / `ai-streaming-start` / `ai-streaming-token` / `ai-streaming-complete`: gated per room
+- `conversation-ai` / `set-conversation-ai` / `conversation-ai-updated`: room‑level AI toggle (multi‑user rooms); solo rooms are always on
 
 #### Invitations
 - `POST /invitations` - Send invitation
@@ -736,3 +766,13 @@ If you encounter any issues or have questions:
 ---
 
 **Built with ❤️ using modern web technologies**
+
+---
+
+### Effective Use Confirmation: LangChain + Vector DB
+- We use LangChain for model abstraction, streaming, and conversation memory, plus robust config handling for current OpenAI families.
+- We use a vector store for retrieval‑augmented prompts scoped to each conversation and persist embeddings for all non‑system messages.
+- Together these deliver grounded, context‑aware, real‑time AI responses with predictable token usage and strong developer ergonomics.
+**AI not responding in a multi‑user room** — ensure the room’s AI is enabled using the header toggle. AI is always enabled in single‑user rooms.
+
+**DB errors after pulling latest changes** — use `./dev.sh` so the backend runs `start-dev.sh` to generate Prisma client and apply migrations automatically.
