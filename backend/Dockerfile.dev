@@ -29,8 +29,10 @@ while ! nc -z db 3306; do\n\
   sleep 2\n\
 done\n\
 echo "Database is ready!"\n\
+echo "Generating Prisma client..."\n\
+yarn prisma generate\n\
 echo "Running Prisma migrations..."\n\
-yarn prisma migrate deploy\n\
+yarn prisma migrate deploy || yarn prisma db push\n\
 echo "Starting NestJS application in development mode..."\n\
 exec yarn start:dev' > /app/start-dev.sh && chmod +x /app/start-dev.sh
 

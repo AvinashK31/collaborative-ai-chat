@@ -71,11 +71,18 @@ export class MessagesController {
     res.setHeader('Access-Control-Allow-Origin', corsOrigin);
     res.setHeader('Access-Control-Allow-Headers', 'Authorization, Cache-Control, Content-Type');
     // Persist the user message
+    const participantCount = await this.messagesService.getParticipantCount(createMessageDto.conversationId);
+    const aiAllowed = participantCount <= 1 ? true : await this.messagesService.getConversationAiEnabled(createMessageDto.conversationId);
+    const shouldStreamToSender = aiAllowed;
     const userMessage = await this.messagesService.createMessage({
       ...createMessageDto,
       userId: req.user.id,
       type: 'USER',
+      metadata: { origin: 'HUMAN' },
     });
+    // Validate message persistence (1-2 lines)
+    if (!userMessage?.id) console.error('message.save.failed', { stage: 'user', conversationId: createMessageDto.conversationId })
+    else console.log('message.save.ok', { id: userMessage.id, type: userMessage.type })
     
     console.log('📨 User message created:', userMessage.id, 'for conversation:', createMessageDto.conversationId);
     console.log('📨 Original userMessage object:', JSON.stringify(userMessage, null, 2));
@@ -96,41 +103,59 @@ export class MessagesController {
     
     // Send user message to original sender via SSE
     res.write(`data: ${JSON.stringify({ type: 'user_message', message: userMessage })}\n\n`);
-    // Notify AI thinking
-    res.write(`data: ${JSON.stringify({ type: 'ai_start', message: 'AI is thinking...' })}\n\n`);
-    this.eventEmitter.emit('ai.thinking', {
-      conversationId: createMessageDto.conversationId,
-      isThinking: true,
-    });
+    // Notify AI thinking only when allowed
+    if (shouldStreamToSender) {
+      res.write(`data: ${JSON.stringify({ type: 'ai_start', message: 'AI is thinking...' })}\n\n`);
+      this.eventEmitter.emit('ai.thinking', {
+        conversationId: createMessageDto.conversationId,
+        isThinking: true,
+      });
+    }
     try {
+      if (!aiAllowed) {
+        // Skip generation entirely when AI disabled for the room
+        return;
+      }
       let full = '';
       for await (const token of this.langchainService.generateStreamingResponse(
         createMessageDto.conversationId,
         createMessageDto.content,
       )) {
         full += token;
-        res.write(`data: ${JSON.stringify({ type: 'ai_token', token })}\n\n`);
+        if (shouldStreamToSender) {
+          res.write(`data: ${JSON.stringify({ type: 'ai_token', token })}\n\n`);
+        }
       }
       // Persist AI message
       const aiMessage = await this.messagesService.createMessage({
         content: full,
         type: 'AI',
         conversationId: createMessageDto.conversationId,
+        metadata: { origin: 'AI', triggeredByUserId: req.user.id, conversationAiEnabledAtSend: aiAllowed },
       });
       this.eventEmitter.emit('message.created', {
         conversationId: createMessageDto.conversationId,
         message: aiMessage,
       });
-      res.write(`data: ${JSON.stringify({ type: 'ai_response', message: aiMessage })}\n\n`);
+      // Validate AI message persistence (1-2 lines)
+      if (!aiMessage?.id) console.error('message.save.failed', { stage: 'ai', conversationId: createMessageDto.conversationId })
+      else console.log('message.save.ok', { id: aiMessage.id, type: aiMessage.type })
+      if (shouldStreamToSender) {
+        res.write(`data: ${JSON.stringify({ type: 'ai_response', message: aiMessage })}\n\n`);
+      }
     } catch (err) {
       console.error('AI generation error:', err);
-      res.write(`data: ${JSON.stringify({ type: 'ai_error', error: 'Failed to generate AI response' })}\n\n`);
+      if (shouldStreamToSender) {
+        res.write(`data: ${JSON.stringify({ type: 'ai_error', error: 'Failed to generate AI response' })}\n\n`);
+      }
     } finally {
-      this.eventEmitter.emit('ai.thinking', {
-        conversationId: createMessageDto.conversationId,
-        isThinking: false,
-      });
-      res.write(`data: ${JSON.stringify({ type: 'complete' })}\n\n`);
+      if (shouldStreamToSender) {
+        this.eventEmitter.emit('ai.thinking', {
+          conversationId: createMessageDto.conversationId,
+          isThinking: false,
+        });
+        res.write(`data: ${JSON.stringify({ type: 'complete' })}\n\n`);
+      }
       res.end();
     }
   }

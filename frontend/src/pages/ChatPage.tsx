@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
+import { toast } from 'react-hot-toast'
 import { useAuth } from '../contexts/AuthContext'
 import { useSocket } from '../contexts/SocketContext'
 import { conversationsApi, messagesApi, invitationsApi } from '../services/api'
@@ -56,6 +57,8 @@ export default function ChatPage() {
   const [showInviteModal, setShowInviteModal] = useState(false)
   const [inviteEmail, setInviteEmail] = useState('')
   const [aiThinking, setAiThinking] = useState(false)
+  // Conversation-level AI status (multi-user rooms). Solo rooms are always On.
+  const [aiPrefByConversation, setAiPrefByConversation] = useState<{[conversationId: string]: boolean}>({})
   const [pendingInvitations, setPendingInvitations] = useState(0)
   const [typingUsers, setTypingUsers] = useState<string[]>([])
   const [typingTimeout, setTypingTimeout] = useState<number | null>(null)
@@ -69,6 +72,9 @@ export default function ChatPage() {
   const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>('default')
   const [unreadCounts, setUnreadCounts] = useState<{[conversationId: string]: number}>({})
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  const messagesContainerRef = useRef<HTMLDivElement>(null)
+  const [isAtBottom, setIsAtBottom] = useState(true)
+  const [showScrollToBottom, setShowScrollToBottom] = useState(false)
   // Throttle local 'active' emits to avoid spamming the server
   const lastActiveEmitRef = useRef<number>(0)
 
@@ -97,9 +103,34 @@ export default function ChatPage() {
     }
   }, [selectedConversation])
 
+  // Auto-scroll only when the user is near the bottom; otherwise, show a helper button
   useEffect(() => {
+    if (isAtBottom) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+    } else {
+      setShowScrollToBottom(true)
+    }
+  }, [messages, isAtBottom])
+
+  // Reset scroll helpers when switching conversations
+  useEffect(() => {
+    setIsAtBottom(true)
+    setShowScrollToBottom(false)
+  }, [selectedConversation?.id])
+
+  const handleMessagesScroll = () => {
+    const el = messagesContainerRef.current
+    if (!el) return
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120
+    setIsAtBottom(nearBottom)
+    if (nearBottom) setShowScrollToBottom(false)
+  }
+
+  const scrollToBottomNow = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages])
+    setIsAtBottom(true)
+    setShowScrollToBottom(false)
+  }
 
   useEffect(() => {
     if (socket && isConnected) {
@@ -496,6 +527,32 @@ export default function ChatPage() {
       socket.on('ai-streaming-token', handleAiStreamingToken)
       socket.on('ai-streaming-complete', handleAiStreamingComplete)
       socket.on('ai-error', handleAiError)
+      // Conversation-level AI events
+      const handleConversationAi = (data: { conversationId: string; aiEnabled: boolean; participantCount?: number }) => {
+        if (!data?.conversationId) return
+        setAiPrefByConversation(prev => ({ ...prev, [data.conversationId]: !!data.aiEnabled }))
+      }
+      const handleConversationAiUpdated = (data: { conversationId: string; aiEnabled: boolean }) => {
+        if (!data?.conversationId) return
+        setAiPrefByConversation(prev => ({ ...prev, [data.conversationId]: !!data.aiEnabled }))
+        const ok = !!data.aiEnabled === !!aiPrefByConversation[data.conversationId]
+        console.log('ai.pref.ack', { ok, conversationId: data.conversationId, aiEnabled: data.aiEnabled })
+        // Toast success for the active conversation
+        if (selectedConversation && selectedConversation.id === data.conversationId) {
+          toast.success(`AI responses ${data.aiEnabled ? 'enabled' : 'disabled'} for you`)
+        }
+        if (selectedConversation && selectedConversation.id === data.conversationId && !data.aiEnabled) {
+          setAiThinking(false)
+          setMessages(prev => prev.filter(m => !(m.type === 'AI' && (m.isStreaming || m.id.includes('streaming-ai-') || m.id.includes('regenerating-ai-')))))
+        }
+      }
+      const handleConversationAiError = (data: { conversationId: string; error: string }) => {
+        console.error('ai.pref.error', data)
+        toast.error('Failed to update AI preference')
+      }
+      socket.on('conversation-ai', handleConversationAi)
+      socket.on('conversation-ai-updated', handleConversationAiUpdated)
+      socket.on('conversation-ai-error', handleConversationAiError)
       socket.on('user-joined', handleUserJoined)
       socket.on('user-left', handleUserLeft)
       socket.on('user-typing', handleUserTyping)
@@ -533,6 +590,9 @@ export default function ChatPage() {
         socket.off('ai-streaming-token', handleAiStreamingToken)
         socket.off('ai-streaming-complete', handleAiStreamingComplete)
         socket.off('ai-error', handleAiError)
+        socket.off('conversation-ai', handleConversationAi)
+        socket.off('conversation-ai-updated', handleConversationAiUpdated)
+        socket.off('conversation-ai-error', handleConversationAiError)
         socket.off('user-joined', handleUserJoined)
         socket.off('user-left', handleUserLeft)
         socket.off('user-typing', handleUserTyping)
@@ -851,8 +911,12 @@ export default function ChatPage() {
           content: messageContent,
           messageId: tempMessage.id
         })
-        // Immediately show thinking indicator for the sender; it will stop on complete/error
-        setAiThinking(true)
+        // Immediately show thinking indicator only if AI enabled for this user in this room
+        const participantsCount = selectedConversation.participants?.length || 0
+        const aiEnabledForMe = participantsCount <= 1 ? true : !!aiPrefByConversation[selectedConversation.id]
+        if (aiEnabledForMe) {
+          setAiThinking(true)
+        }
       } else {
         // Fallback to API if WebSocket is not available
         console.warn('WebSocket not available, falling back to API')
@@ -1021,6 +1085,10 @@ export default function ChatPage() {
       ...prev,
       [conversation.id]: 0
     }))
+    // Optimistically set AI pref ON for single-user chats until server confirms
+    if ((conversation.participants?.length || 0) <= 1) {
+      setAiPrefByConversation(prev => ({ ...prev, [conversation.id]: true }))
+    }
   }
 
   const formatTime = (dateString: string) => {
@@ -1467,6 +1535,34 @@ export default function ChatPage() {
                       return `${onlineCount} online • ${total} participants`
                     })()}
                   </span>
+                  {/* AI toggle (per-user, per-conversation). Disabled for single-user rooms */}
+                  <div className="flex items-center space-x-2 ml-4">
+                    <label className="text-xs text-gray-600">AI Responses</label>
+                    <button
+                      onClick={() => {
+                        if (!socket) return
+                        const current = (selectedConversation.participants?.length || 0) <= 1
+                          ? true
+                          : !!aiPrefByConversation[selectedConversation.id]
+                        socket.emit('set-conversation-ai', {
+                          conversationId: selectedConversation.id,
+                          aiEnabled: !current,
+                        })
+                      }}
+                      disabled={(selectedConversation.participants?.length || 0) <= 1}
+                      className={`px-2 py-1 text-xs rounded ${
+                        ((selectedConversation.participants?.length || 0) <= 1 ? true : aiPrefByConversation[selectedConversation.id]) ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'
+                      } ${((selectedConversation.participants?.length || 0) <= 1) ? 'opacity-50 cursor-not-allowed' : ''}`}
+                      title={(selectedConversation.participants?.length || 0) <= 1 ? 'Enabled by default for single-user chats' : 'Toggle AI responses for you'}
+                    >
+                      {((selectedConversation.participants?.length || 0) <= 1 ? true : aiPrefByConversation[selectedConversation.id]) ? 'On' : 'Off'}
+                    </button>
+                    {(selectedConversation.participants?.length || 0) <= 1 && (
+                      <span className="ml-2 px-2 py-0.5 rounded-full bg-purple-100 text-purple-700 text-xs font-medium" title="Solo chat: AI is always enabled">
+                        Solo • AI auto-on
+                      </span>
+                    )}
+                  </div>
                   {selectedConversation.participants && selectedConversation.participants.length > 0 && (
                     <div className="flex items-center space-x-3 ml-4">
                       {selectedConversation.participants.map((participant: Participant) => (
@@ -1495,7 +1591,11 @@ export default function ChatPage() {
             </div>
 
             {/* Messages */}
-            <div className="flex-1 overflow-y-auto p-6 bg-gradient-to-b from-gray-50 to-white">
+            <div
+              ref={messagesContainerRef}
+              onScroll={handleMessagesScroll}
+              className="flex-1 overflow-y-auto p-6 bg-gradient-to-b from-gray-50 to-white"
+            >
               <div className="max-w-4xl mx-auto space-y-6">
                 {messages.map((message) => {
                   // Skip rendering placeholder AI messages with no content (shown via 'AI is thinking...')
@@ -1742,7 +1842,19 @@ export default function ChatPage() {
                     </div>
                   </div>
                 )}
-                
+                {showScrollToBottom && (
+                  <div className="sticky bottom-4 flex justify-center z-10">
+                    <button
+                      type="button"
+                      onClick={scrollToBottomNow}
+                      className="pointer-events-auto inline-flex items-center px-3 py-1.5 rounded-full bg-blue-600 text-white text-xs shadow-md hover:bg-blue-700 transition"
+                      aria-label="Scroll to latest messages"
+                    >
+                      New messages ↓
+                    </button>
+                  </div>
+                )}
+
                 <div ref={messagesEndRef} />
               </div>
             </div>

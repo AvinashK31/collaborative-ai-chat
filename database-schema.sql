@@ -32,6 +32,7 @@ CREATE TABLE conversation_participants (
     userId VARCHAR(191) NOT NULL,
     conversationId VARCHAR(191) NOT NULL,
     joinedAt DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    aiEnabled TINYINT(1) NOT NULL DEFAULT 1,
     UNIQUE KEY unique_user_conversation (userId, conversationId),
     FOREIGN KEY (userId) REFERENCES users(id) ON DELETE CASCADE,
     FOREIGN KEY (conversationId) REFERENCES conversations(id) ON DELETE CASCADE,

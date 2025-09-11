@@ -32,6 +32,7 @@ model User {
 model Conversation {
   id        String   @id @default(cuid())
   title     String?
+  aiEnabled Boolean  @default(true)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -50,6 +51,7 @@ model ConversationParticipant {
   userId         String
   conversationId String
   joinedAt       DateTime @default(now())
+  aiEnabled      Boolean  @default(true)
 
   // Relations
   user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)

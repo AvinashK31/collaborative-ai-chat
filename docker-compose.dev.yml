@@ -54,7 +54,8 @@ services:
       - /app/node_modules
     ports:
       - "9000:9000"
-    command: yarn start:dev
+    # Use startup script (host-mounted) to run migrations before dev server
+    command: bash /app/start-dev.sh
     healthcheck:
       test: ["CMD", "node", "-e", "require('net').connect(9000, 'localhost')"]
       interval: 10s

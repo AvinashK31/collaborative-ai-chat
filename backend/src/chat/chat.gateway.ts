@@ -66,6 +66,31 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     private webSocketService: WebSocketService,
   ) {}
 
+  /**
+   * Compute the set of socket IDs that should receive AI events.
+   * - Single-user conversations: include all sockets (same user across tabs)
+   * - Multi-user conversations: include all sockets only when the conversation's
+   *   AI is enabled; otherwise, none.
+   */
+  private async getAiRecipientSocketIds(conversationId: string): Promise<Set<string>> {
+    const roomSockets = await this.server.in(conversationId).allSockets();
+    const recipients = new Set<string>();
+    try {
+      const participantCount = await this.messagesService.getParticipantCount(conversationId);
+      if (participantCount <= 1) {
+        roomSockets.forEach((id) => recipients.add(id));
+        return recipients;
+      }
+      const aiOn = await this.messagesService.getConversationAiEnabled(conversationId);
+      if (!aiOn) return recipients; // empty set when AI disabled
+      roomSockets.forEach((id) => recipients.add(id));
+    } catch (e) {
+      console.error('getAiRecipientSocketIds error:', e);
+      roomSockets.forEach((id) => recipients.add(id));
+    }
+    return recipients;
+  }
+
   onModuleInit() {
     // Start activity checking timer - check every minute
     this.activityCheckInterval = setInterval(() => {
@@ -280,6 +305,16 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
       // Confirm to the user that they successfully joined
       client.emit('user-joined-conversation', { conversationId: data.conversationId });
+
+      // Send room AI status for the conversation
+      try {
+        const participantCount = await this.messagesService.getParticipantCount(data.conversationId);
+        const aiEnabled = participantCount <= 1 ? true : await this.messagesService.getConversationAiEnabled(data.conversationId);
+        client.emit('conversation-ai', { conversationId: data.conversationId, aiEnabled, participantCount });
+      } catch (prefErr) {
+        console.error('Failed to load AI preference on join:', prefErr);
+        client.emit('conversation-ai', { conversationId: data.conversationId, aiEnabled: true });
+      }
       
       // Notify other participants that user joined and broadcast current user's status
       console.log(`Broadcasting user-joined event for ${client.user.email} to room ${data.conversationId}`);
@@ -369,12 +404,24 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       }
 
       // Persist the user message
+      const senderAiPref = await this.messagesService.getUserAiPreference(client.user.id, data.conversationId);
       const userMessage = await this.messagesService.createMessage({
         content: data.content,
         type: 'USER',
         userId: client.user.id,
         conversationId: data.conversationId,
+        metadata: {
+          origin: 'HUMAN',
+          aiEnabledAtSend: senderAiPref,
+        },
       });
+
+      // Validate save in 1-2 lines
+      if (!userMessage?.id || userMessage.content !== data.content) {
+        console.error('message.save.failed', { stage: 'user', conversationId: data.conversationId });
+      } else {
+        console.log('message.save.ok', { id: userMessage.id, type: userMessage.type });
+      }
 
       // Broadcast user message to all participants (including sender)
       const messageToSend = {
@@ -395,10 +442,18 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       // Exclude the sender to prevent duplicate (temp + broadcast) messages on their UI
       client.to(data.conversationId).emit('new-message', messageToSend);
 
-      // Notify AI thinking to all participants and the sender explicitly
-      console.log(`🤖 Broadcasting AI thinking start to conversation ${data.conversationId}`);
-      this.server.to(data.conversationId).emit('ai-thinking', { conversationId: data.conversationId, isThinking: true });
-      client.emit('ai-thinking', { conversationId: data.conversationId, isThinking: true });
+      // Room-level AI gating
+      const participantCount = await this.messagesService.getParticipantCount(data.conversationId);
+      const aiAllowed = participantCount <= 1 ? true : await this.messagesService.getConversationAiEnabled(data.conversationId);
+      if (!aiAllowed) {
+        console.log(`🤖 AI disabled for conversation ${data.conversationId}; skipping generation`);
+        return;
+      }
+
+      // Notify AI thinking to recipients
+      console.log(`🤖 Broadcasting AI thinking start selectively in conversation ${data.conversationId}`);
+      const thinkingRecipients = await this.getAiRecipientSocketIds(data.conversationId);
+      for (const sid of thinkingRecipients) this.server.to(sid).emit('ai-thinking', { conversationId: data.conversationId, isThinking: true });
 
       // Generate AI response and stream to all participants
       try {
@@ -407,7 +462,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
         
         console.log(`🤖 Starting AI streaming for message ${aiMessageId}`);
         
-        // Send initial AI message structure to all participants
+        // Send initial AI message structure to allowed participants
         const initialAiMessage = {
           id: aiMessageId,
           content: '',
@@ -417,9 +472,10 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
           createdAt: new Date().toISOString(),
           isStreaming: true,
         };
-        
-        console.log(`🤖 Broadcasting AI streaming start to conversation ${data.conversationId}:`, initialAiMessage);
-        this.server.to(data.conversationId).emit('ai-streaming-start', initialAiMessage);
+        console.log(`🤖 Broadcasting AI streaming start selectively to conversation ${data.conversationId}:`, initialAiMessage);
+        for (const sid of thinkingRecipients) {
+          this.server.to(sid).emit('ai-streaming-start', initialAiMessage);
+        }
 
         // Stream AI response tokens to all participants
         console.log(`🤖 Starting token streaming for conversation ${data.conversationId}`);
@@ -428,14 +484,17 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
           data.content,
         )) {
           fullResponse += token;
-          
-          // Broadcast token to all participants in real-time
-          console.log(`🤖 Broadcasting token: "${token}"`);
-          this.server.to(data.conversationId).emit('ai-streaming-token', {
-            messageId: aiMessageId,
-            token,
-            fullContent: fullResponse,
-          });
+          // Re-evaluate recipients so live toggles take effect
+          const tokenRecipients = await this.getAiRecipientSocketIds(data.conversationId);
+          // Broadcast token to recipients in real-time
+          if (token.trim()) console.log(`🤖 Token broadcast to ${tokenRecipients.size} recipients`);
+          for (const sid of tokenRecipients) {
+            this.server.to(sid).emit('ai-streaming-token', {
+              messageId: aiMessageId,
+              token,
+              fullContent: fullResponse,
+            });
+          }
         }
 
         // Persist complete AI message
@@ -443,7 +502,19 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
           content: fullResponse,
           type: 'AI',
           conversationId: data.conversationId,
+          metadata: {
+            origin: 'AI',
+            triggeredByUserId: client.user.id,
+            conversationAiEnabledAtSend: aiAllowed,
+          },
         });
+
+        // Validate save in 1-2 lines
+        if (!aiMessage?.id) {
+          console.error('message.save.failed', { stage: 'ai', conversationId: data.conversationId });
+        } else {
+          console.log('message.save.ok', { id: aiMessage.id, type: aiMessage.type });
+        }
 
         // Send final AI message to all participants
         const finalAiMessage = {
@@ -456,19 +527,26 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
           isStreaming: false,
         };
 
-        this.server.to(data.conversationId).emit('ai-streaming-complete', finalAiMessage);
+        const finalRecipients = await this.getAiRecipientSocketIds(data.conversationId);
+        for (const sid of finalRecipients) {
+          this.server.to(sid).emit('ai-streaming-complete', finalAiMessage);
+        }
 
       } catch (error) {
         console.error('AI generation error:', error);
-        this.server.to(data.conversationId).emit('ai-error', { 
+        const errorRecipients = await this.getAiRecipientSocketIds(data.conversationId);
+        const payload = { 
           error: 'Failed to generate AI response',
           conversationId: data.conversationId,
-        });
+        };
+        for (const sid of errorRecipients) this.server.to(sid).emit('ai-error', payload);
       } finally {
         // Stop AI thinking indicator
-        console.log(`🤖 Broadcasting AI thinking stop to conversation ${data.conversationId}`);
-        this.server.to(data.conversationId).emit('ai-thinking', { conversationId: data.conversationId, isThinking: false });
-        client.emit('ai-thinking', { conversationId: data.conversationId, isThinking: false });
+        console.log(`🤖 Broadcasting AI thinking stop selectively to conversation ${data.conversationId}`);
+        const stopRecipients = await this.getAiRecipientSocketIds(data.conversationId);
+        for (const sid of stopRecipients) {
+          this.server.to(sid).emit('ai-thinking', { conversationId: data.conversationId, isThinking: false });
+        }
       }
 
     } catch (error) {
@@ -625,30 +703,76 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     console.log(`WebSocket: Broadcasting new message to conversation ${payload.conversationId}:`, payload.message.id);
     console.log(`WebSocket: Message type:`, payload.message.type);
     console.log(`WebSocket: Message user:`, payload.message.userId);
-    
+
     // Add conversationId to the message for frontend handling
     const messageWithConversationId = {
       ...payload.message,
       conversationId: payload.conversationId
-    };
-    
-    // Get number of clients in the room for debugging
+    } as any;
+
+    // For AI messages, gate delivery by user preference (SSE path)
+    if (String(payload.message.type) === 'AI') {
+      this.getAiRecipientSocketIds(payload.conversationId)
+        .then(recips => {
+          for (const sid of recips) {
+            this.server.to(sid).emit('new-message', messageWithConversationId);
+          }
+          console.log(`WebSocket: gated AI message to ${recips.size} sockets for conversation ${payload.conversationId}`);
+        })
+        .catch(err => {
+          console.error('AI gated broadcast failed, falling back to room:', err);
+          this.server.to(payload.conversationId).emit('new-message', messageWithConversationId);
+        });
+      return;
+    }
+
+    // Non-AI: broadcast to all clients in the conversation
     const room = this.server.sockets.adapter.rooms.get(payload.conversationId);
     const clientCount = room ? room.size : 0;
     console.log(`WebSocket: Conversation ${payload.conversationId} has ${clientCount} connected clients`);
-    
-    // Broadcast to ALL clients in the conversation (including sender's multiple tabs)
     this.server.to(payload.conversationId).emit('new-message', messageWithConversationId);
-    
     console.log(`WebSocket: new-message event emitted to conversation ${payload.conversationId}`);
   }
 
   @OnEvent('ai.thinking')
-  handleAiThinking(payload: { conversationId: string; isThinking: boolean }) {
-    console.log(`Broadcasting AI thinking status to conversation ${payload.conversationId}:`, payload.isThinking);
-    
-    // Broadcast to ALL clients in the conversation (including sender's multiple tabs)
-    this.server.to(payload.conversationId).emit('ai-thinking', { conversationId: payload.conversationId, isThinking: payload.isThinking });
+  async handleAiThinking(payload: { conversationId: string; isThinking: boolean }) {
+    console.log(`Broadcasting AI thinking status (gated) to conversation ${payload.conversationId}:`, payload.isThinking);
+    try {
+      const recips = await this.getAiRecipientSocketIds(payload.conversationId);
+      for (const sid of recips) {
+        this.server.to(sid).emit('ai-thinking', { conversationId: payload.conversationId, isThinking: payload.isThinking });
+      }
+    } catch (e) {
+      console.error('ai.thinking gated broadcast failed, falling back to room:', e);
+      this.server.to(payload.conversationId).emit('ai-thinking', { conversationId: payload.conversationId, isThinking: payload.isThinking });
+    }
+  }
+
+  @SubscribeMessage('set-conversation-ai')
+  async handleSetConversationAi(
+    @ConnectedSocket() client: AuthenticatedSocket,
+    @MessageBody() data: { conversationId: string; aiEnabled: boolean },
+  ) {
+    if (!client.user) return;
+    try {
+      // Enforce: single-user chatrooms always AI on
+      const count = await this.messagesService.getParticipantCount(data.conversationId);
+      const desired = count <= 1 ? true : !!data.aiEnabled;
+      const updated = await this.messagesService.setConversationAiEnabled(data.conversationId, desired);
+
+      if (!updated || updated.aiEnabled !== desired) {
+        console.error('ai.conversation.save.failed', { conversationId: data.conversationId });
+        client.emit('conversation-ai-error', { conversationId: data.conversationId, error: 'Failed to update AI setting' });
+        return;
+      }
+      console.log('ai.conversation.save.ok', { conversationId: data.conversationId, aiEnabled: updated.aiEnabled });
+
+      // Notify whole room about the change
+      this.server.to(data.conversationId).emit('conversation-ai-updated', { conversationId: data.conversationId, aiEnabled: updated.aiEnabled });
+    } catch (err) {
+      console.error('ai.conversation.error', { err: String(err) });
+      client.emit('conversation-ai-error', { conversationId: data.conversationId, error: 'Unable to update setting' });
+    }
   }
 
   @OnEvent('message.updated')
