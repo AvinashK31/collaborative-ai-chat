@@ -734,7 +734,7 @@ docker-compose ps
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-## 🆘 Support
+## Support
 
 If you encounter any issues or have questions:
 
@@ -762,17 +762,3 @@ If you encounter any issues or have questions:
 - [ ] CDN integration
 - [ ] Image optimization
 - [ ] Bundle size optimization
-
----
-
-**Built with ❤️ using modern web technologies**
-
----
-
-### Effective Use Confirmation: LangChain + Vector DB
-- We use LangChain for model abstraction, streaming, and conversation memory, plus robust config handling for current OpenAI families.
-- We use a vector store for retrieval‑augmented prompts scoped to each conversation and persist embeddings for all non‑system messages.
-- Together these deliver grounded, context‑aware, real‑time AI responses with predictable token usage and strong developer ergonomics.
-**AI not responding in a multi‑user room** — ensure the room’s AI is enabled using the header toggle. AI is always enabled in single‑user rooms.
-
-**DB errors after pulling latest changes** — use `./dev.sh` so the backend runs `start-dev.sh` to generate Prisma client and apply migrations automatically.
