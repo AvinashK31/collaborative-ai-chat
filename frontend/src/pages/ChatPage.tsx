@@ -73,6 +73,8 @@ export default function ChatPage() {
   const [unreadCounts, setUnreadCounts] = useState<{[conversationId: string]: number}>({})
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const messagesContainerRef = useRef<HTMLDivElement>(null)
+  const inviteModalRef = useRef<HTMLDivElement>(null)
+  const deleteModalRef = useRef<HTMLDivElement>(null)
   const [isAtBottom, setIsAtBottom] = useState(true)
   const [showScrollToBottom, setShowScrollToBottom] = useState(false)
   // Throttle local 'active' emits to avoid spamming the server
@@ -86,6 +88,12 @@ export default function ChatPage() {
       loadUnreadCounts() // Load persisted unread counts
     }
   }, [user]) // Depend on user instead of empty array
+
+  // Update document title based on selected conversation
+  useEffect(() => {
+    const title = selectedConversation?.title || 'Chat'
+    document.title = `${title} — Collaborative AI Chat`
+  }, [selectedConversation?.title])
 
   useEffect(() => {
     if (selectedConversation) {
@@ -103,10 +111,11 @@ export default function ChatPage() {
     }
   }, [selectedConversation])
 
-  // Auto-scroll only when the user is near the bottom; otherwise, show a helper button
+  // Auto-scroll only when the user is exactly at the bottom; otherwise, show a helper button
   useEffect(() => {
     if (isAtBottom) {
-      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+      // Use non-animated autoscroll to avoid fighting with user scroll
+      messagesEndRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' })
     } else {
       setShowScrollToBottom(true)
     }
@@ -118,19 +127,99 @@ export default function ChatPage() {
     setShowScrollToBottom(false)
   }, [selectedConversation?.id])
 
+  // Basic focus trap and ESC handling for modals
+  useEffect(() => {
+    const activeModalRef = showInviteModal ? inviteModalRef : (showDeleteModal ? deleteModalRef : null)
+    const isAnyModalOpen = !!activeModalRef
+    if (!isAnyModalOpen) return
+
+    const modalEl = activeModalRef.current
+    if (!modalEl) return
+
+    const previouslyFocused: Element | null = document.activeElement
+
+    // Focus the first focusable element inside the modal
+    const focusableSelectors = [
+      'a[href]', 'button:not([disabled])', 'textarea', 'input', 'select', '[tabindex]:not([tabindex="-1"])'
+    ]
+    const focusable = Array.from(modalEl.querySelectorAll<HTMLElement>(focusableSelectors.join(',')))
+    if (focusable.length) {
+      focusable[0].focus()
+    } else {
+      modalEl.focus()
+    }
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (showInviteModal) setShowInviteModal(false)
+        if (showDeleteModal) setShowDeleteModal(false)
+      }
+
+      if (e.key === 'Tab') {
+        const focusables = Array.from(modalEl.querySelectorAll<HTMLElement>(focusableSelectors.join(',')))
+        if (focusables.length === 0) return
+        const first = focusables[0]
+        const last = focusables[focusables.length - 1]
+        const current = document.activeElement as HTMLElement
+
+        if (e.shiftKey) {
+          if (current === first || !modalEl.contains(current)) {
+            last.focus()
+            e.preventDefault()
+          }
+        } else {
+          if (current === last || !modalEl.contains(current)) {
+            first.focus()
+            e.preventDefault()
+          }
+        }
+      }
+    }
+
+    document.addEventListener('keydown', handleKeyDown)
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown)
+      if (previouslyFocused instanceof HTMLElement) previouslyFocused.focus()
+    }
+  }, [showInviteModal, showDeleteModal])
+
   const handleMessagesScroll = () => {
     const el = messagesContainerRef.current
     if (!el) return
-    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120
-    setIsAtBottom(nearBottom)
-    if (nearBottom) setShowScrollToBottom(false)
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
+    // Consider at bottom if within a small tolerance to account for subpixel rounding and padding
+    const atBottom = distanceFromBottom <= 16
+    setIsAtBottom(atBottom)
+    setShowScrollToBottom(!atBottom)
   }
 
   const scrollToBottomNow = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+    messagesEndRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' })
     setIsAtBottom(true)
     setShowScrollToBottom(false)
   }
+
+  // Use an IntersectionObserver on the end sentinel to robustly detect "at bottom"
+  useEffect(() => {
+    const root = messagesContainerRef.current
+    const target = messagesEndRef.current
+    if (!root || !target) return
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const entry = entries[0]
+        const visible = entry && entry.isIntersecting
+        setIsAtBottom(!!visible)
+        setShowScrollToBottom(!visible)
+      },
+      {
+        root,
+        threshold: 0.99,
+      }
+    )
+    observer.observe(target)
+    return () => observer.disconnect()
+  }, [messagesContainerRef.current])
 
   useEffect(() => {
     if (socket && isConnected) {
@@ -1458,6 +1547,17 @@ export default function ChatPage() {
                       
                       <div
                         onClick={() => selectConversation(conversation)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault()
+                            selectConversation(conversation)
+                          }
+                        }}
+                        role="button"
+                        tabIndex={0}
+                        aria-current={selectedConversation?.id === conversation.id}
+                        aria-label={`${conversation.title || 'Untitled Chat'}${unreadCounts[conversation.id] ? `, ${unreadCounts[conversation.id]} unread` : ''}`}
+                        aria-describedby={`participants-${conversation.id}`}
                         className="cursor-pointer"
                       >
                         <div className="flex items-center justify-between">
@@ -1471,7 +1571,7 @@ export default function ChatPage() {
                             </span>
                           )}
                         </div>
-                        <p className="text-sm text-gray-500 mt-1">
+                        <p id={`participants-${conversation.id}`} className="text-sm text-gray-500 mt-1">
                           {(() => {
                             const map = userStatuses[conversation.id] || {}
                             const total = Math.max(conversation.participants?.length || 0, Object.keys(map).length)
@@ -1537,7 +1637,7 @@ export default function ChatPage() {
                   </span>
                   {/* AI toggle (per-user, per-conversation). Disabled for single-user rooms */}
                   <div className="flex items-center space-x-2 ml-4">
-                    <label className="text-xs text-gray-600">AI Responses</label>
+                    <label className="text-xs text-gray-600" id="ai-toggle-label">AI Responses</label>
                     <button
                       onClick={() => {
                         if (!socket) return
@@ -1550,10 +1650,13 @@ export default function ChatPage() {
                         })
                       }}
                       disabled={(selectedConversation.participants?.length || 0) <= 1}
-                      className={`px-2 py-1 text-xs rounded ${
+                      className={`px-2 py-1 text-xs rounded focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2 ${
                         ((selectedConversation.participants?.length || 0) <= 1 ? true : aiPrefByConversation[selectedConversation.id]) ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'
                       } ${((selectedConversation.participants?.length || 0) <= 1) ? 'opacity-50 cursor-not-allowed' : ''}`}
                       title={(selectedConversation.participants?.length || 0) <= 1 ? 'Enabled by default for single-user chats' : 'Toggle AI responses for you'}
+                      aria-labelledby="ai-toggle-label"
+                      aria-pressed={((selectedConversation.participants?.length || 0) <= 1 ? true : !!aiPrefByConversation[selectedConversation.id])}
+                      aria-disabled={(selectedConversation.participants?.length || 0) <= 1}
                     >
                       {((selectedConversation.participants?.length || 0) <= 1 ? true : aiPrefByConversation[selectedConversation.id]) ? 'On' : 'Off'}
                     </button>
@@ -1584,7 +1687,9 @@ export default function ChatPage() {
               </div>
               <button
                 onClick={() => setShowInviteModal(true)}
-                className="btn btn-secondary text-sm"
+                className="btn btn-secondary text-sm focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2"
+                aria-haspopup="dialog"
+                aria-controls="invite-modal-title"
               >
                 Invite to Collaborate
               </button>
@@ -1596,7 +1701,13 @@ export default function ChatPage() {
               onScroll={handleMessagesScroll}
               className="flex-1 overflow-y-auto p-6 bg-gradient-to-b from-gray-50 to-white"
             >
-              <div className="max-w-4xl mx-auto space-y-6">
+              <div
+                className="max-w-4xl mx-auto space-y-6"
+                role="log"
+                aria-live="polite"
+                aria-relevant="additions text"
+                aria-label="Chat messages"
+              >
                 {messages.map((message) => {
                   // Skip rendering placeholder AI messages with no content (shown via 'AI is thinking...')
                   if (message.type === 'AI' && (!message.content || message.content.trim() === '')) {
@@ -1831,7 +1942,7 @@ export default function ChatPage() {
 
                 {/* Typing indicators for other users */}
                 {typingUsers.length > 0 && (
-                  <div className="flex justify-start">
+                  <div className="flex justify-start" aria-live="polite">
                     <div className="max-w-2xl lg:max-w-3xl text-left">
                       <div className="text-xs font-medium px-2 py-1 text-gray-600 bg-gray-100 inline-block rounded-md">
                         {typingUsers.length === 1 
@@ -1885,13 +1996,15 @@ export default function ChatPage() {
                     value={newMessage}
                     onChange={handleInputChange}
                     placeholder="Type your message..."
+                    aria-label="Message"
                     className="flex-1 px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
                     disabled={sendingMessage}
                   />
                   <button
                     type="submit"
                     disabled={!newMessage.trim() || sendingMessage}
-                    className="bg-blue-500 text-white px-6 py-3 rounded-xl hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200 font-medium shadow-sm hover:shadow-md"
+                    className="bg-blue-500 text-white px-6 py-3 rounded-xl hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200 font-medium shadow-sm hover:shadow-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
+                    aria-label="Send message"
                   >
                     {sendingMessage ? (
                       <span className="flex items-center space-x-2">
@@ -1930,10 +2043,19 @@ export default function ChatPage() {
 
       {/* Invite Modal */}
       {showInviteModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg p-6 w-96">
-            <h3 className="text-lg font-semibold mb-4">Invite to Collaborate</h3>
-            <p className="text-sm text-gray-600 mb-4">
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" onClick={() => setShowInviteModal(false)}>
+          <div
+            ref={inviteModalRef}
+            className="bg-white rounded-lg p-6 w-96 outline-none"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="invite-modal-title"
+            aria-describedby="invite-modal-desc"
+            tabIndex={-1}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 id="invite-modal-title" className="text-lg font-semibold mb-4">Invite to Collaborate</h3>
+            <p id="invite-modal-desc" className="text-sm text-gray-600 mb-4">
               Enter the email address of the person you want to invite to this conversation.
             </p>
             <input
@@ -1942,6 +2064,7 @@ export default function ChatPage() {
               onChange={(e) => setInviteEmail(e.target.value)}
               placeholder="Enter email address"
               className="w-full input mb-4"
+              aria-label="Invitee email address"
             />
             <div className="flex space-x-2 justify-end">
               <button
@@ -1964,10 +2087,19 @@ export default function ChatPage() {
 
       {/* Delete Confirmation Modal */}
       {showDeleteModal && conversationToDelete && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg p-6 w-96">
-            <h3 className="text-lg font-semibold mb-4 text-red-600">Delete Conversation</h3>
-            <p className="text-sm text-gray-600 mb-4">
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" onClick={cancelDeleteConversation}>
+          <div
+            ref={deleteModalRef}
+            className="bg-white rounded-lg p-6 w-96 outline-none"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="delete-modal-title"
+            aria-describedby="delete-modal-desc"
+            tabIndex={-1}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 id="delete-modal-title" className="text-lg font-semibold mb-4 text-red-600">Delete Conversation</h3>
+            <p id="delete-modal-desc" className="text-sm text-gray-600 mb-4">
               Are you sure you want to delete "<strong>{conversationToDelete.title || 'Untitled Chat'}</strong>"? 
               This action cannot be undone and will delete all messages in this conversation.
             </p>
@@ -1980,7 +2112,8 @@ export default function ChatPage() {
               </button>
               <button
                 onClick={confirmDeleteConversation}
-                className="bg-red-600 text-white px-4 py-2 rounded hover:bg-red-700 transition-colors"
+                className="bg-red-600 text-white px-4 py-2 rounded hover:bg-red-700 transition-colors focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2"
+                aria-label="Confirm delete conversation"
               >
                 Delete
               </button>

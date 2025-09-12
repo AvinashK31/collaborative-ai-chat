@@ -28,6 +28,11 @@ export default function InvitationsPage() {
   const [loading, setLoading] = useState(true)
   const [processing, setProcessing] = useState<string | null>(null)
 
+  // Update document title for context
+  useEffect(() => {
+    document.title = 'Invitations — Collaborative AI Chat'
+  }, [])
+
   useEffect(() => {
     loadInvitations()
     
@@ -230,4 +235,4 @@ export default function InvitationsPage() {
       </div>
     </div>
   )
-} 
+}

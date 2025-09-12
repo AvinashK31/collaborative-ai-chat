@@ -18,7 +18,7 @@ function App() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <main id="main-content" className="min-h-screen bg-gray-50" role="main">
       <Routes>
         <Route 
           path="/login" 
@@ -41,7 +41,7 @@ function App() {
           element={<Navigate to={user ? "/chat" : "/login"} replace />} 
         />
       </Routes>
-    </div>
+    </main>
   )
 }
 

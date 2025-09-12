@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 import toast from 'react-hot-toast'
@@ -22,6 +22,10 @@ import LoadingSpinner from '../components/LoadingSpinner'
  * ```
  */
 export default function LoginPage() {
+  // Update document title for accessibility and context
+  useEffect(() => {
+    document.title = 'Sign in — Collaborative AI Chat'
+  }, [])
   /** Current email input value */
   const [email, setEmail] = useState('')
   /** Current password input value */
@@ -91,6 +95,7 @@ export default function LoginPage() {
                 type="email"
                 autoComplete="email"
                 required
+                autoFocus
                 className="input mt-1"
                 placeholder="Enter your email"
                 value={email}

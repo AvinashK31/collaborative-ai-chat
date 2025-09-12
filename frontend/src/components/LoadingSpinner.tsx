@@ -1,7 +1,7 @@
 /**
  * Props interface for the LoadingSpinner component.
  */
-interface LoadingSpinnerProps {
+interface LoadingSpinnerProps extends React.HTMLAttributes<HTMLDivElement> {
   /** Size of the spinner - small, medium, or large */
   size?: 'sm' | 'md' | 'lg'
   /** Additional CSS classes to apply to the spinner */
@@ -30,7 +30,7 @@ interface LoadingSpinnerProps {
  * <LoadingSpinner size="lg" />
  * ```
  */
-export default function LoadingSpinner({ size = 'md', className = '' }: LoadingSpinnerProps) {
+export default function LoadingSpinner({ size = 'md', className = '', ...rest }: LoadingSpinnerProps) {
   /** CSS classes for different spinner sizes */
   const sizeClasses = {
     sm: 'w-4 h-4',
@@ -39,9 +39,15 @@ export default function LoadingSpinner({ size = 'md', className = '' }: LoadingS
   }
 
   return (
-    <div 
+    <div
       className={`animate-spin rounded-full border-2 border-gray-300 border-t-primary-600 ${sizeClasses[size]} ${className}`}
+      role="status"
+      aria-live="polite"
+      aria-label="Loading"
       data-testid="loading-spinner"
-    />
+      {...rest}
+    >
+      <span className="sr-only">Loading</span>
+    </div>
   )
-} 
+}
