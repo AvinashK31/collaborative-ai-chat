@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 import toast from 'react-hot-toast'
@@ -10,6 +10,11 @@ export default function RegisterPage() {
   const [name, setName] = useState('')
   const [loading, setLoading] = useState(false)
   const { register } = useAuth()
+
+  // Update document title for accessibility and context
+  useEffect(() => {
+    document.title = 'Register — Collaborative AI Chat'
+  }, [])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -70,6 +75,7 @@ export default function RegisterPage() {
                 type="email"
                 autoComplete="email"
                 required
+                autoFocus
                 className="input mt-1"
                 placeholder="Enter your email"
                 value={email}
@@ -108,4 +114,4 @@ export default function RegisterPage() {
       </div>
     </div>
   )
-} 
+}
